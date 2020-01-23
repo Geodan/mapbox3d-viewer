@@ -18,6 +18,7 @@
   "author": "Tom van Tilburg",
   "license": "MIT",
   "dependencies": {
+    "@geodan/gm-beta-mapbox3d": "^1.0.1-0",
     "@geodan/gm-document-reader": "^3.0.0",
     "@geodan/gm-profile-panel": "^3.0.0-1",
     "@webcomponents/webcomponentsjs": "^2.4.1",
