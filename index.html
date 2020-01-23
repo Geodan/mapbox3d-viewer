@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Demo voor gm-beta-mapbox3d</title>
+    <meta name="generator" content="Manual">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Webviewer with geodanmaps beta components">
+
+    <script src="../node_modules/mapbox-gl/dist/mapbox-gl.js"></script>
+    <link href="../node_modules/mapbox-gl/dist/mapbox-gl.css" rel="stylesheet">
+    <script src="../node_modules/three/build/three.min.js"></script>
+    <script src="../node_modules/three/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="../node_modules/mapbox-3dtiles/Mapbox3DTiles.js"></script>
+    
+    <style>
+      body { 
+        margin: 0;
+        /* This is a font-stack that tries to use the system-default sans-serifs first */
+        font-family: 'Open Sans',sans-serif,'Arial','Helvetica',"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        min-height: 100%;
+        padding: 0;
+      }
+      mapbox3d-viewer {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <potree-viewer></potree-viewer>
+    <noscript>
+      Please enable JavaScript to view this website.
+    </noscript>
+    <!-- Load webcomponents-loader.js to check and load any polyfills your browser needs -->
+    <!--<script src="./node_modules/@webcomponents/webcomponentsjs/webcomponents-loader.js"></script>-->
+    <script src="./build/mapbox3d-viewer.js"></script>
+  </body>
+</html>

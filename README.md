@@ -1,2 +1,2 @@
-# mapbox3d-viewer
-Demo viewer based on gm-beta-mapbox3d component
+# potree-viewer
+Viewer demonstrating potree with GM components

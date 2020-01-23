@@ -1,0 +1,39 @@
+{
+  "name": "mapbox3d-viewer",
+  "version": "1.0.0",
+  "description": "Viewer demonstrating mapbox3d with GM components",
+  "main": "./src/index.html",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "install": ""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Geodan/mapbox3d-viewer.git"
+  },
+  "keywords": [
+    "geodan",
+    "mapbox3d"
+  ],
+  "author": "Tom van Tilburg",
+  "license": "MIT",
+  "dependencies": {
+    "@geodan/gm-document-reader": "^3.0.0",
+    "@geodan/gm-profile-panel": "^3.0.0-1",
+    "@webcomponents/webcomponentsjs": "^2.4.1",
+    "edugis": "git+https://github.com/Geodan/edugis-pwa.git#develop",
+    "lit-element": "^2.2.1"
+  },
+  "devDependencies": {
+    "rollup": "^1.29.0",
+    "rollup-plugin-node-resolve": "^5.2.0",
+    "@babel/core": "^7.8.3",
+    "@babel/plugin-proposal-class-properties": "^7.8.3",
+    "@babel/plugin-proposal-decorators": "^7.8.3",
+    "rollup-plugin-babel": "^4.3.3"
+  },
+  "bugs": {
+    "url": "https://github.com/Geodan/mapbox3d-viewer/issues"
+  },
+  "homepage": "https://github.com/Geodan/mapbox3d-viewer#readme"
+}
