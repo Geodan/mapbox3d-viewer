@@ -114,17 +114,6 @@ class ToolBar extends (LitElement) {
     searchResult(e){
         console.log(e.detail);
     }
-    fitBounds(e){
-        console.log(e.detail);
-        proj4.defs("EPSG:28992","+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 +x_0=155000 +y_0=463000 +ellps=bessel +towgs84=565.417,50.3319,465.552,-0.398957,0.343988,-1.8774,4.0725 +units=m +no_defs");
-        let zoomto = proj4('EPSG:4326','EPSG:28992',e.detail.point);
-        let event = new CustomEvent('zoom-to', {
-            detail: {
-              point: zoomto
-            }
-        });
-        this.dispatchEvent(event);
-    }
     render() {
         const toolbar = this.toolList.find(tool=>tool.name==="toolbar");
         if (!toolbar || !toolbar.visible) {
@@ -242,7 +231,6 @@ class ToolBar extends (LitElement) {
             <div id="panel-container" class="${this.currentTool !==''?"active":""}">
                 <map-panel .active="${this.currentTool==="search"}">
                     <map-search .active="${this.currentTool==="search"}" .viewbox="${this.viewbox}" 
-                        @xxsearchclick="${e=>this.fitBounds(e)}" 
                         @searchresult="${e=>this.searchResult(e)}"
                     ></map-search>
                 </map-panel>
@@ -257,17 +245,17 @@ class ToolBar extends (LitElement) {
                         @updateopacity="${e => this.updateLayerOpacity(e)}"
                         @changefilter="${e=>this.updateLayerFilter(e)}"
                         >
-                        <span slot="title">Puntenwolken</span>
+                        <span slot="title">Kaartlagen</span>
                 
                         <map-layer-set id="layersthematic" userreorder open .layerlist="${this.thematiclayers}" 
                         .zoom="${this.zoom}"
                         nolayer="Geen puntenwolken beschikbaar">
-                            <span>Mijn puntenwolken</span>
+                            <span>Mijn data</span>
                         </map-layer-set>
                         <map-layer-set id="layersbackground" .layerlist="${this.backgroundLayers}" 
                         .zoom="${this.zoom}"
                         .nolayer = "Geen achtergronddata beschikbaar">
-                            <span>AHN3</span>
+                            <span>Basislaag</span>
                         </map-layer-set>
             
                     </map-layer-container>
