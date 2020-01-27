@@ -19565,7 +19565,9 @@ input[type=range]:focus::-ms-fill-upper {
           this.map.setLayoutProperty(clickedLayer, 'visibility', 'visible');
         }
       }
-      
+      flyTo(coords){
+        this.map.flyTo({center: coords});
+      }
       firstUpdated(){
         let mapcontainer = this.shadowRoot.getElementById('map');
         this.map = new mapboxgl.Map({
@@ -35962,7 +35964,9 @@ input[type=range]:focus::-ms-fill-upper {
         let el = this.shadowRoot.querySelector('gm-beta-mapbox3d');
         //el.position = [config.map.view.center.x,config.map.view.center.y,1500];
         //el.lookat = [config.map.view.center.x,config.map.view.center.y,0];
-       
+        setTimeout(_=>{
+          mapbox.map.triggerRepaint();
+        },5000);
       }
       updateLayerVisibility(layer){
         let el = this.shadowRoot.querySelector('gm-beta-mapbox3d');
