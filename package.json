@@ -24,7 +24,7 @@
     "@webcomponents/webcomponentsjs": "^2.4.1",
     "edugis": "git+https://github.com/Geodan/edugis-pwa.git#develop",
     "lit-element": "^2.2.1",
-    "mapbox-gl": "^1.7.0"
+    "mapbox-gl": "1.7.0"
   },
   "devDependencies": {
     "@babel/core": "^7.8.4",
