@@ -1,4 +1,4 @@
 #/bin/bash
 
 rollup -c rollup.config.js
-rsync -ark * saturnus:/var/data/html/beta/mapbox3d
+rsync -ark * saturnus.geodan.nl:/var/data/html/beta/mapbox3d

@@ -115,11 +115,38 @@ class Mapbox3DViewer extends (LitElement) {
   } 
   parseconfig(config){
     let mapbox = this.shadowRoot.querySelector('gm-beta-mapbox3d');
-    let layers3d = config.map.layers.filter(d=>d.source['3dtiles'] === 'true');
-    let layerswmts = config.map.layers.filter(d=>d.source.type === 'OGC_WMTS');
+    setTimeout(_=>{
+    config.map.layers.map(l=>{
+      if (l.source['3dtiles'] === 'true') {
+        return {
+          id: String(l.id), 
+          type: '3dtiles',
+          url: l.source.url
+        }
+      }
+      else if (l.source.type === 'OGC_WMTS'){
+        return {
+          id: String(l.id),
+          type: 'raster',
+          source: {
+            type: 'raster',
+              tiles: [
+                l.source.url
+              ],
+          tileSize: 256
+          },
+          paint: {}
+        }
+      }
+    }).forEach(l=>mapbox.addLayer(l));
+  },2000);
+/*
+    
+    //let layers3d = config.map.layers.filter(d=>d.source['3dtiles'] === 'true');
+    //let layerswmts = config.map.layers.filter(d=>d.source.type === 'OGC_WMTS');
     setTimeout(_=>{
       layerswmts.forEach(l=>{
-        mapbox.map.addLayer(
+        mapbox.addLayer(
           {
           'id': String(l.id),
           'type': 'raster',
@@ -137,10 +164,12 @@ class Mapbox3DViewer extends (LitElement) {
       layers3d.forEach(l=>{
         mapbox.addLayer({
           id: l.id, 
+          type: '3dtiles',
           url: l.source.url
         });
       });
     },2000);
+    */
     let alllayers = config.map.layers.map(d=>{
       return {
         id: String(d.id),
