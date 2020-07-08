@@ -81,7 +81,7 @@ class Mapbox3DViewer extends (LitElement) {
       menu-items='[{"title": "GeodanMaps", "url": "https://www.geodanmaps.nl/" }, {"title": "Geodan", "url": "https://www.geodan.nl"}]'
     ></gm-profile-panel>
    
-    <gm-beta-mapbox3d></gm-beta-mapbox3d>
+    <gm-beta-mapbox3d .center="${[4.48732, 51.90217]}" zoom="14.3" bearing="0" pitch="45" controls></gm-beta-mapbox3d>
 
     <tool-bar 
       .thematiclayers="${this.thematiclayers}"
@@ -121,7 +121,8 @@ class Mapbox3DViewer extends (LitElement) {
         return {
           id: String(l.id), 
           type: '3dtiles',
-          url: l.source.url
+	  url: l.source.url,
+	  lighting: 'hemisphere'
         }
       }
       else if (l.source.type === 'OGC_WMTS'){
@@ -195,10 +196,17 @@ class Mapbox3DViewer extends (LitElement) {
     toolbar.backgroundLayers = alllayers.filter(d=>d.isBaseLayer==true);
 
     let el = this.shadowRoot.querySelector('gm-beta-mapbox3d');
-    el.map.setCenter([config.map.view.center.x,config.map.view.center.y]);
-    el.map.setZoom(config.map.view.zoom);
+    
+    el.map
+      .setCenter([config.map.view.center.x,config.map.view.center.y])
+      .setZoom(config.map.view.zoom);
     
     setTimeout(_=>{
+      
+      el.map
+        .setCenter([config.map.view.center.x,config.map.view.center.y])
+        .setZoom(config.map.view.zoom);
+      
       mapbox.map.triggerRepaint();
     },5000);
   }

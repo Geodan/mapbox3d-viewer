@@ -4,7 +4,10 @@
   "description": "Viewer demonstrating mapbox3d with GM components",
   "main": "index.html",
   "scripts": {
+    "start": "npx static-server -p 8082",
     "test": "echo \"Error: no test specified\" && exit 1",
+    "version": "rollup -c rollup.config.js",
+    "deploy": "deploy.sh",
     "install": ""
   },
   "repository": {
@@ -18,21 +21,22 @@
   "author": "Tom van Tilburg",
   "license": "MIT",
   "dependencies": {
-    "@geodan/gm-beta-mapbox3d": "0.0.1-7",
+    "@geodan/gm-beta-mapbox3d": "0.0.1-17",
     "@geodan/gm-document-reader": "^3.0.0",
     "@geodan/gm-profile-panel": "^3.0.0-1",
-    "@webcomponents/webcomponentsjs": "^2.4.1",
+    "@webcomponents/webcomponentsjs": "^2.4.3",
     "edugis": "git+https://github.com/Geodan/edugis-pwa.git#develop",
-    "lit-element": "^2.2.1",
-    "mapbox-gl": "1.7.0"
+    "lit-element": "^2.3.1",
+    "mapbox-gl": "^1.9.1"
   },
   "devDependencies": {
-    "@babel/core": "^7.8.4",
+    "@babel/core": "^7.9.0",
     "@babel/plugin-proposal-class-properties": "^7.8.3",
     "@babel/plugin-proposal-decorators": "^7.8.3",
-    "rollup": "^1.31.0",
-    "rollup-plugin-babel": "^4.3.3",
-    "rollup-plugin-node-resolve": "^5.2.0"
+    "rollup": "^1.32.1",
+    "rollup-plugin-babel": "^4.4.0",
+    "rollup-plugin-node-resolve": "^5.2.0",
+    "static-server": "^2.2.1"
   },
   "bugs": {
     "url": "https://github.com/Geodan/mapbox3d-viewer/issues"

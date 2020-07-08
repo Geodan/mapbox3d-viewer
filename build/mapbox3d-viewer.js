@@ -14,28 +14,11 @@
      * subject to an additional IP rights grant found at
      * http://polymer.github.io/PATENTS.txt
      */
-    const directives = new WeakMap();
-    const isDirective = (o) => {
-        return typeof o === 'function' && directives.has(o);
-    };
-
-    /**
-     * @license
-     * Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
-     * This code may only be used under the BSD style license found at
-     * http://polymer.github.io/LICENSE.txt
-     * The complete set of authors may be found at
-     * http://polymer.github.io/AUTHORS.txt
-     * The complete set of contributors may be found at
-     * http://polymer.github.io/CONTRIBUTORS.txt
-     * Code distributed by Google as part of the polymer project is also
-     * subject to an additional IP rights grant found at
-     * http://polymer.github.io/PATENTS.txt
-     */
     /**
      * True if the custom elements polyfill is in use.
      */
-    const isCEPolyfill = window.customElements !== undefined &&
+    const isCEPolyfill = typeof window !== 'undefined' &&
+        window.customElements != null &&
         window.customElements.polyfillWrapFlushCallback !==
             undefined;
     /**
@@ -61,29 +44,6 @@
             start = n;
         }
     };
-
-    /**
-     * @license
-     * Copyright (c) 2018 The Polymer Project Authors. All rights reserved.
-     * This code may only be used under the BSD style license found at
-     * http://polymer.github.io/LICENSE.txt
-     * The complete set of authors may be found at
-     * http://polymer.github.io/AUTHORS.txt
-     * The complete set of contributors may be found at
-     * http://polymer.github.io/CONTRIBUTORS.txt
-     * Code distributed by Google as part of the polymer project is also
-     * subject to an additional IP rights grant found at
-     * http://polymer.github.io/PATENTS.txt
-     */
-    /**
-     * A sentinel value that signals that a value was handled by a directive and
-     * should not be written to the DOM.
-     */
-    const noChange = {};
-    /**
-     * A sentinel value that signals a NodePart to fully clear its content.
-     */
-    const nothing = {};
 
     /**
      * @license
@@ -114,7 +74,7 @@
      */
     const boundAttributeSuffix = '$lit$';
     /**
-     * An updateable Template that tracks the location of dynamic parts.
+     * An updatable Template that tracks the location of dynamic parts.
      */
     class Template {
         constructor(result, element) {
@@ -296,7 +256,174 @@
      *    * (") then any non-("), or
      *    * (') then any non-(')
      */
-    const lastAttributeNameRegex = /([ \x09\x0a\x0c\x0d])([^\0-\x1F\x7F-\x9F "'>=/]+)([ \x09\x0a\x0c\x0d]*=[ \x09\x0a\x0c\x0d]*(?:[^ \x09\x0a\x0c\x0d"'`<>=]*|"[^"]*|'[^']*))$/;
+    const lastAttributeNameRegex = 
+    // eslint-disable-next-line no-control-regex
+    /([ \x09\x0a\x0c\x0d])([^\0-\x1F\x7F-\x9F "'>=/]+)([ \x09\x0a\x0c\x0d]*=[ \x09\x0a\x0c\x0d]*(?:[^ \x09\x0a\x0c\x0d"'`<>=]*|"[^"]*|'[^']*))$/;
+
+    /**
+     * @license
+     * Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
+     * This code may only be used under the BSD style license found at
+     * http://polymer.github.io/LICENSE.txt
+     * The complete set of authors may be found at
+     * http://polymer.github.io/AUTHORS.txt
+     * The complete set of contributors may be found at
+     * http://polymer.github.io/CONTRIBUTORS.txt
+     * Code distributed by Google as part of the polymer project is also
+     * subject to an additional IP rights grant found at
+     * http://polymer.github.io/PATENTS.txt
+     */
+    const walkerNodeFilter = 133 /* NodeFilter.SHOW_{ELEMENT|COMMENT|TEXT} */;
+    /**
+     * Removes the list of nodes from a Template safely. In addition to removing
+     * nodes from the Template, the Template part indices are updated to match
+     * the mutated Template DOM.
+     *
+     * As the template is walked the removal state is tracked and
+     * part indices are adjusted as needed.
+     *
+     * div
+     *   div#1 (remove) <-- start removing (removing node is div#1)
+     *     div
+     *       div#2 (remove)  <-- continue removing (removing node is still div#1)
+     *         div
+     * div <-- stop removing since previous sibling is the removing node (div#1,
+     * removed 4 nodes)
+     */
+    function removeNodesFromTemplate(template, nodesToRemove) {
+        const { element: { content }, parts } = template;
+        const walker = document.createTreeWalker(content, walkerNodeFilter, null, false);
+        let partIndex = nextActiveIndexInTemplateParts(parts);
+        let part = parts[partIndex];
+        let nodeIndex = -1;
+        let removeCount = 0;
+        const nodesToRemoveInTemplate = [];
+        let currentRemovingNode = null;
+        while (walker.nextNode()) {
+            nodeIndex++;
+            const node = walker.currentNode;
+            // End removal if stepped past the removing node
+            if (node.previousSibling === currentRemovingNode) {
+                currentRemovingNode = null;
+            }
+            // A node to remove was found in the template
+            if (nodesToRemove.has(node)) {
+                nodesToRemoveInTemplate.push(node);
+                // Track node we're removing
+                if (currentRemovingNode === null) {
+                    currentRemovingNode = node;
+                }
+            }
+            // When removing, increment count by which to adjust subsequent part indices
+            if (currentRemovingNode !== null) {
+                removeCount++;
+            }
+            while (part !== undefined && part.index === nodeIndex) {
+                // If part is in a removed node deactivate it by setting index to -1 or
+                // adjust the index as needed.
+                part.index = currentRemovingNode !== null ? -1 : part.index - removeCount;
+                // go to the next active part.
+                partIndex = nextActiveIndexInTemplateParts(parts, partIndex);
+                part = parts[partIndex];
+            }
+        }
+        nodesToRemoveInTemplate.forEach((n) => n.parentNode.removeChild(n));
+    }
+    const countNodes = (node) => {
+        let count = (node.nodeType === 11 /* Node.DOCUMENT_FRAGMENT_NODE */) ? 0 : 1;
+        const walker = document.createTreeWalker(node, walkerNodeFilter, null, false);
+        while (walker.nextNode()) {
+            count++;
+        }
+        return count;
+    };
+    const nextActiveIndexInTemplateParts = (parts, startIndex = -1) => {
+        for (let i = startIndex + 1; i < parts.length; i++) {
+            const part = parts[i];
+            if (isTemplatePartActive(part)) {
+                return i;
+            }
+        }
+        return -1;
+    };
+    /**
+     * Inserts the given node into the Template, optionally before the given
+     * refNode. In addition to inserting the node into the Template, the Template
+     * part indices are updated to match the mutated Template DOM.
+     */
+    function insertNodeIntoTemplate(template, node, refNode = null) {
+        const { element: { content }, parts } = template;
+        // If there's no refNode, then put node at end of template.
+        // No part indices need to be shifted in this case.
+        if (refNode === null || refNode === undefined) {
+            content.appendChild(node);
+            return;
+        }
+        const walker = document.createTreeWalker(content, walkerNodeFilter, null, false);
+        let partIndex = nextActiveIndexInTemplateParts(parts);
+        let insertCount = 0;
+        let walkerIndex = -1;
+        while (walker.nextNode()) {
+            walkerIndex++;
+            const walkerNode = walker.currentNode;
+            if (walkerNode === refNode) {
+                insertCount = countNodes(node);
+                refNode.parentNode.insertBefore(node, refNode);
+            }
+            while (partIndex !== -1 && parts[partIndex].index === walkerIndex) {
+                // If we've inserted the node, simply adjust all subsequent parts
+                if (insertCount > 0) {
+                    while (partIndex !== -1) {
+                        parts[partIndex].index += insertCount;
+                        partIndex = nextActiveIndexInTemplateParts(parts, partIndex);
+                    }
+                    return;
+                }
+                partIndex = nextActiveIndexInTemplateParts(parts, partIndex);
+            }
+        }
+    }
+
+    /**
+     * @license
+     * Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
+     * This code may only be used under the BSD style license found at
+     * http://polymer.github.io/LICENSE.txt
+     * The complete set of authors may be found at
+     * http://polymer.github.io/AUTHORS.txt
+     * The complete set of contributors may be found at
+     * http://polymer.github.io/CONTRIBUTORS.txt
+     * Code distributed by Google as part of the polymer project is also
+     * subject to an additional IP rights grant found at
+     * http://polymer.github.io/PATENTS.txt
+     */
+    const directives = new WeakMap();
+    const isDirective = (o) => {
+        return typeof o === 'function' && directives.has(o);
+    };
+
+    /**
+     * @license
+     * Copyright (c) 2018 The Polymer Project Authors. All rights reserved.
+     * This code may only be used under the BSD style license found at
+     * http://polymer.github.io/LICENSE.txt
+     * The complete set of authors may be found at
+     * http://polymer.github.io/AUTHORS.txt
+     * The complete set of contributors may be found at
+     * http://polymer.github.io/CONTRIBUTORS.txt
+     * Code distributed by Google as part of the polymer project is also
+     * subject to an additional IP rights grant found at
+     * http://polymer.github.io/PATENTS.txt
+     */
+    /**
+     * A sentinel value that signals that a value was handled by a directive and
+     * should not be written to the DOM.
+     */
+    const noChange = {};
+    /**
+     * A sentinel value that signals a NodePart to fully clear its content.
+     */
+    const nothing = {};
 
     /**
      * @license
@@ -357,7 +484,7 @@
             // Given these constraints, with full custom elements support we would
             // prefer the order: Clone, Process, Adopt, Upgrade, Update, Connect
             //
-            // But Safari dooes not implement CustomElementRegistry#upgrade, so we
+            // But Safari does not implement CustomElementRegistry#upgrade, so we
             // can not implement that order and still have upgrade-before-update and
             // upgrade disconnected fragments. So we instead sacrifice the
             // process-before-upgrade constraint, since in Custom Elements v1 elements
@@ -467,7 +594,7 @@
                 // For each binding we want to determine the kind of marker to insert
                 // into the template source before it's parsed by the browser's HTML
                 // parser. The marker type is based on whether the expression is in an
-                // attribute, text, or comment poisition.
+                // attribute, text, or comment position.
                 //   * For node-position bindings we insert a comment with the marker
                 //     sentinel as its text content, like <!--{{lit-guid}}-->.
                 //   * For attribute bindings we insert just the marker sentinel for the
@@ -487,13 +614,13 @@
                 // be false positives.
                 isCommentBinding = (commentOpen > -1 || isCommentBinding) &&
                     s.indexOf('-->', commentOpen + 1) === -1;
-                // Check to see if we have an attribute-like sequence preceeding the
+                // Check to see if we have an attribute-like sequence preceding the
                 // expression. This can match "name=value" like structures in text,
                 // comments, and attribute values, so there can be false-positives.
                 const attributeMatch = lastAttributeNameRegex.exec(s);
                 if (attributeMatch === null) {
                     // We're only in this branch if we don't have a attribute-like
-                    // preceeding sequence. For comments, this guards against unusual
+                    // preceding sequence. For comments, this guards against unusual
                     // attribute values like <div foo="<!--${'bar'}">. Cases like
                     // <!-- foo=${'bar'}--> are handled correctly in the attribute branch
                     // below.
@@ -557,12 +684,12 @@
     };
     const isIterable = (value) => {
         return Array.isArray(value) ||
-            // tslint:disable-next-line:no-any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             !!(value && value[Symbol.iterator]);
     };
     /**
      * Writes attribute values to the DOM for a group of AttributeParts bound to a
-     * single attibute. The value is only set once even if there are multiple parts
+     * single attribute. The value is only set once even if there are multiple parts
      * for an attribute.
      */
     class AttributeCommitter {
@@ -699,6 +826,9 @@
             this.__pendingValue = value;
         }
         commit() {
+            if (this.startNode.parentNode === null) {
+                return;
+            }
             while (isDirective(this.__pendingValue)) {
                 const directive = this.__pendingValue;
                 this.__pendingValue = noChange;
@@ -895,7 +1025,7 @@
         commit() {
             if (this.dirty) {
                 this.dirty = false;
-                // tslint:disable-next-line:no-any
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 this.element[this.name] = this._getValue();
             }
         }
@@ -903,24 +1033,29 @@
     class PropertyPart extends AttributePart {
     }
     // Detect event listener options support. If the `capture` property is read
-    // from the options object, then options are supported. If not, then the thrid
+    // from the options object, then options are supported. If not, then the third
     // argument to add/removeEventListener is interpreted as the boolean capture
     // value so we should only pass the `capture` property.
     let eventOptionsSupported = false;
-    try {
-        const options = {
-            get capture() {
-                eventOptionsSupported = true;
-                return false;
-            }
-        };
-        // tslint:disable-next-line:no-any
-        window.addEventListener('test', options, options);
-        // tslint:disable-next-line:no-any
-        window.removeEventListener('test', options, options);
-    }
-    catch (_e) {
-    }
+    // Wrap into an IIFE because MS Edge <= v41 does not support having try/catch
+    // blocks right into the body of a module
+    (() => {
+        try {
+            const options = {
+                get capture() {
+                    eventOptionsSupported = true;
+                    return false;
+                }
+            };
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            window.addEventListener('test', options, options);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            window.removeEventListener('test', options, options);
+        }
+        catch (_e) {
+            // event options not supported
+        }
+    })();
     class EventPart {
         constructor(element, eventName, eventContext) {
             this.value = undefined;
@@ -976,57 +1111,6 @@
         (eventOptionsSupported ?
             { capture: o.capture, passive: o.passive, once: o.once } :
             o.capture);
-
-    /**
-     * @license
-     * Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
-     * This code may only be used under the BSD style license found at
-     * http://polymer.github.io/LICENSE.txt
-     * The complete set of authors may be found at
-     * http://polymer.github.io/AUTHORS.txt
-     * The complete set of contributors may be found at
-     * http://polymer.github.io/CONTRIBUTORS.txt
-     * Code distributed by Google as part of the polymer project is also
-     * subject to an additional IP rights grant found at
-     * http://polymer.github.io/PATENTS.txt
-     */
-    /**
-     * Creates Parts when a template is instantiated.
-     */
-    class DefaultTemplateProcessor {
-        /**
-         * Create parts for an attribute-position binding, given the event, attribute
-         * name, and string literals.
-         *
-         * @param element The element containing the binding
-         * @param name  The attribute name
-         * @param strings The string literals. There are always at least two strings,
-         *   event for fully-controlled bindings with a single expression.
-         */
-        handleAttributeExpressions(element, name, strings, options) {
-            const prefix = name[0];
-            if (prefix === '.') {
-                const committer = new PropertyCommitter(element, name.slice(1), strings);
-                return committer.parts;
-            }
-            if (prefix === '@') {
-                return [new EventPart(element, name.slice(1), options.eventContext)];
-            }
-            if (prefix === '?') {
-                return [new BooleanAttributePart(element, name.slice(1), strings)];
-            }
-            const committer = new AttributeCommitter(element, name, strings);
-            return committer.parts;
-        }
-        /**
-         * Create parts for a text-position binding.
-         * @param templateFactory
-         */
-        handleTextExpression(options) {
-            return new NodePart(options);
-        }
-    }
-    const defaultTemplateProcessor = new DefaultTemplateProcessor();
 
     /**
      * @license
@@ -1128,20 +1212,43 @@
      * subject to an additional IP rights grant found at
      * http://polymer.github.io/PATENTS.txt
      */
-    // IMPORTANT: do not change the property name or the assignment expression.
-    // This line will be used in regexes to search for lit-html usage.
-    // TODO(justinfagnani): inject version number at build time
-    (window['litHtmlVersions'] || (window['litHtmlVersions'] = [])).push('1.1.2');
     /**
-     * Interprets a template literal as an HTML template that can efficiently
-     * render to and update a container.
+     * Creates Parts when a template is instantiated.
      */
-    const html = (strings, ...values) => new TemplateResult(strings, values, 'html', defaultTemplateProcessor);
-    /**
-     * Interprets a template literal as an SVG template that can efficiently
-     * render to and update a container.
-     */
-    const svg = (strings, ...values) => new SVGTemplateResult(strings, values, 'svg', defaultTemplateProcessor);
+    class DefaultTemplateProcessor {
+        /**
+         * Create parts for an attribute-position binding, given the event, attribute
+         * name, and string literals.
+         *
+         * @param element The element containing the binding
+         * @param name  The attribute name
+         * @param strings The string literals. There are always at least two strings,
+         *   event for fully-controlled bindings with a single expression.
+         */
+        handleAttributeExpressions(element, name, strings, options) {
+            const prefix = name[0];
+            if (prefix === '.') {
+                const committer = new PropertyCommitter(element, name.slice(1), strings);
+                return committer.parts;
+            }
+            if (prefix === '@') {
+                return [new EventPart(element, name.slice(1), options.eventContext)];
+            }
+            if (prefix === '?') {
+                return [new BooleanAttributePart(element, name.slice(1), strings)];
+            }
+            const committer = new AttributeCommitter(element, name, strings);
+            return committer.parts;
+        }
+        /**
+         * Create parts for a text-position binding.
+         * @param templateFactory
+         */
+        handleTextExpression(options) {
+            return new NodePart(options);
+        }
+    }
+    const defaultTemplateProcessor = new DefaultTemplateProcessor();
 
     /**
      * @license
@@ -1156,116 +1263,22 @@
      * subject to an additional IP rights grant found at
      * http://polymer.github.io/PATENTS.txt
      */
-    const walkerNodeFilter = 133 /* NodeFilter.SHOW_{ELEMENT|COMMENT|TEXT} */;
-    /**
-     * Removes the list of nodes from a Template safely. In addition to removing
-     * nodes from the Template, the Template part indices are updated to match
-     * the mutated Template DOM.
-     *
-     * As the template is walked the removal state is tracked and
-     * part indices are adjusted as needed.
-     *
-     * div
-     *   div#1 (remove) <-- start removing (removing node is div#1)
-     *     div
-     *       div#2 (remove)  <-- continue removing (removing node is still div#1)
-     *         div
-     * div <-- stop removing since previous sibling is the removing node (div#1,
-     * removed 4 nodes)
-     */
-    function removeNodesFromTemplate(template, nodesToRemove) {
-        const { element: { content }, parts } = template;
-        const walker = document.createTreeWalker(content, walkerNodeFilter, null, false);
-        let partIndex = nextActiveIndexInTemplateParts(parts);
-        let part = parts[partIndex];
-        let nodeIndex = -1;
-        let removeCount = 0;
-        const nodesToRemoveInTemplate = [];
-        let currentRemovingNode = null;
-        while (walker.nextNode()) {
-            nodeIndex++;
-            const node = walker.currentNode;
-            // End removal if stepped past the removing node
-            if (node.previousSibling === currentRemovingNode) {
-                currentRemovingNode = null;
-            }
-            // A node to remove was found in the template
-            if (nodesToRemove.has(node)) {
-                nodesToRemoveInTemplate.push(node);
-                // Track node we're removing
-                if (currentRemovingNode === null) {
-                    currentRemovingNode = node;
-                }
-            }
-            // When removing, increment count by which to adjust subsequent part indices
-            if (currentRemovingNode !== null) {
-                removeCount++;
-            }
-            while (part !== undefined && part.index === nodeIndex) {
-                // If part is in a removed node deactivate it by setting index to -1 or
-                // adjust the index as needed.
-                part.index = currentRemovingNode !== null ? -1 : part.index - removeCount;
-                // go to the next active part.
-                partIndex = nextActiveIndexInTemplateParts(parts, partIndex);
-                part = parts[partIndex];
-            }
-        }
-        nodesToRemoveInTemplate.forEach((n) => n.parentNode.removeChild(n));
+    // IMPORTANT: do not change the property name or the assignment expression.
+    // This line will be used in regexes to search for lit-html usage.
+    // TODO(justinfagnani): inject version number at build time
+    if (typeof window !== 'undefined') {
+        (window['litHtmlVersions'] || (window['litHtmlVersions'] = [])).push('1.2.1');
     }
-    const countNodes = (node) => {
-        let count = (node.nodeType === 11 /* Node.DOCUMENT_FRAGMENT_NODE */) ? 0 : 1;
-        const walker = document.createTreeWalker(node, walkerNodeFilter, null, false);
-        while (walker.nextNode()) {
-            count++;
-        }
-        return count;
-    };
-    const nextActiveIndexInTemplateParts = (parts, startIndex = -1) => {
-        for (let i = startIndex + 1; i < parts.length; i++) {
-            const part = parts[i];
-            if (isTemplatePartActive(part)) {
-                return i;
-            }
-        }
-        return -1;
-    };
     /**
-     * Inserts the given node into the Template, optionally before the given
-     * refNode. In addition to inserting the node into the Template, the Template
-     * part indices are updated to match the mutated Template DOM.
+     * Interprets a template literal as an HTML template that can efficiently
+     * render to and update a container.
      */
-    function insertNodeIntoTemplate(template, node, refNode = null) {
-        const { element: { content }, parts } = template;
-        // If there's no refNode, then put node at end of template.
-        // No part indices need to be shifted in this case.
-        if (refNode === null || refNode === undefined) {
-            content.appendChild(node);
-            return;
-        }
-        const walker = document.createTreeWalker(content, walkerNodeFilter, null, false);
-        let partIndex = nextActiveIndexInTemplateParts(parts);
-        let insertCount = 0;
-        let walkerIndex = -1;
-        while (walker.nextNode()) {
-            walkerIndex++;
-            const walkerNode = walker.currentNode;
-            if (walkerNode === refNode) {
-                insertCount = countNodes(node);
-                refNode.parentNode.insertBefore(node, refNode);
-            }
-            while (partIndex !== -1 && parts[partIndex].index === walkerIndex) {
-                // If we've inserted the node, simply adjust all subsequent parts
-                if (insertCount > 0) {
-                    while (partIndex !== -1) {
-                        parts[partIndex].index += insertCount;
-                        partIndex = nextActiveIndexInTemplateParts(parts, partIndex);
-                    }
-                    return;
-                }
-                partIndex = nextActiveIndexInTemplateParts(parts, partIndex);
-            }
-        }
-    }
+    const html = (strings, ...values) => new TemplateResult(strings, values, 'html', defaultTemplateProcessor);
+    /**
+     * Interprets a template literal as an SVG template that can efficiently
+     * render to and update a container.
+     */
+    const svg = (strings, ...values) => new SVGTemplateResult(strings, values, 'svg', defaultTemplateProcessor);
 
     /**
      * @license
@@ -1599,12 +1612,10 @@
         reflect: false,
         hasChanged: notEqual
     };
-    const microtaskPromise = Promise.resolve(true);
     const STATE_HAS_UPDATED = 1;
     const STATE_UPDATE_REQUESTED = 1 << 2;
     const STATE_IS_REFLECTING_TO_ATTRIBUTE = 1 << 3;
     const STATE_IS_REFLECTING_TO_PROPERTY = 1 << 4;
-    const STATE_HAS_CONNECTED = 1 << 5;
     /**
      * The Closure JS Compiler doesn't currently have good support for static
      * property semantics where "this" is dynamic (e.g.
@@ -1622,8 +1633,9 @@
             super();
             this._updateState = 0;
             this._instanceProperties = undefined;
-            this._updatePromise = microtaskPromise;
-            this._hasConnectedResolver = undefined;
+            // Initialize to an unresolved Promise so we can make sure the element has
+            // connected before first update.
+            this._updatePromise = new Promise((res) => this._enableUpdatingResolver = res);
             /**
              * Map with keys for any properties that have changed since the last
              * update cycle with previous values.
@@ -1672,10 +1684,25 @@
             }
         }
         /**
-         * Creates a property accessor on the element prototype if one does not exist.
+         * Creates a property accessor on the element prototype if one does not exist
+         * and stores a PropertyDeclaration for the property with the given options.
          * The property setter calls the property's `hasChanged` property option
          * or uses a strict identity check to determine whether or not to request
          * an update.
+         *
+         * This method may be overridden to customize properties; however,
+         * when doing so, it's important to call `super.createProperty` to ensure
+         * the property is setup correctly. This method calls
+         * `getPropertyDescriptor` internally to get a descriptor to install.
+         * To customize what properties do when they are get or set, override
+         * `getPropertyDescriptor`. To customize the options for a property,
+         * implement `createProperty` like this:
+         *
+         * static createProperty(name, options) {
+         *   options = Object.assign(options, {myOption: true});
+         *   super.createProperty(name, options);
+         * }
+         *
          * @nocollapse
          */
         static createProperty(name, options = defaultPropertyDeclaration) {
@@ -1693,7 +1720,37 @@
                 return;
             }
             const key = typeof name === 'symbol' ? Symbol() : `__${name}`;
-            Object.defineProperty(this.prototype, name, {
+            const descriptor = this.getPropertyDescriptor(name, key, options);
+            if (descriptor !== undefined) {
+                Object.defineProperty(this.prototype, name, descriptor);
+            }
+        }
+        /**
+         * Returns a property descriptor to be defined on the given named property.
+         * If no descriptor is returned, the property will not become an accessor.
+         * For example,
+         *
+         *   class MyElement extends LitElement {
+         *     static getPropertyDescriptor(name, key, options) {
+         *       const defaultDescriptor =
+         *           super.getPropertyDescriptor(name, key, options);
+         *       const setter = defaultDescriptor.set;
+         *       return {
+         *         get: defaultDescriptor.get,
+         *         set(value) {
+         *           setter.call(this, value);
+         *           // custom action.
+         *         },
+         *         configurable: true,
+         *         enumerable: true
+         *       }
+         *     }
+         *   }
+         *
+         * @nocollapse
+         */
+        static getPropertyDescriptor(name, key, _options) {
+            return {
                 // tslint:disable-next-line:no-any no symbol in index
                 get() {
                     return this[key];
@@ -1705,7 +1762,23 @@
                 },
                 configurable: true,
                 enumerable: true
-            });
+            };
+        }
+        /**
+         * Returns the property options associated with the given property.
+         * These options are defined with a PropertyDeclaration via the `properties`
+         * object or the `@property` decorator and are registered in
+         * `createProperty(...)`.
+         *
+         * Note, this method should be considered "final" and not overridden. To
+         * customize the options for a given property, override `createProperty`.
+         *
+         * @nocollapse
+         * @final
+         */
+        static getPropertyOptions(name) {
+            return this._classProperties && this._classProperties.get(name) ||
+                defaultPropertyDeclaration;
         }
         /**
          * Creates property accessors for registered properties and ensures
@@ -1843,14 +1916,14 @@
             this._instanceProperties = undefined;
         }
         connectedCallback() {
-            this._updateState = this._updateState | STATE_HAS_CONNECTED;
             // Ensure first connection completes an update. Updates cannot complete
-            // before connection and if one is pending connection the
-            // `_hasConnectionResolver` will exist. If so, resolve it to complete the
-            // update, otherwise requestUpdate.
-            if (this._hasConnectedResolver) {
-                this._hasConnectedResolver();
-                this._hasConnectedResolver = undefined;
+            // before connection.
+            this.enableUpdating();
+        }
+        enableUpdating() {
+            if (this._enableUpdatingResolver !== undefined) {
+                this._enableUpdatingResolver();
+                this._enableUpdatingResolver = undefined;
             }
         }
         /**
@@ -1903,9 +1976,12 @@
                 return;
             }
             const ctor = this.constructor;
+            // Note, hint this as an `AttributeMap` so closure clearly understands
+            // the type; it has issues with tracking types through statics
+            // tslint:disable-next-line:no-unnecessary-type-assertion
             const propName = ctor._attributeToPropertyMap.get(name);
             if (propName !== undefined) {
-                const options = ctor._classProperties.get(propName) || defaultPropertyDeclaration;
+                const options = ctor.getPropertyOptions(propName);
                 // mark state reflecting
                 this._updateState = this._updateState | STATE_IS_REFLECTING_TO_PROPERTY;
                 this[propName] =
@@ -1925,7 +2001,7 @@
             // If we have a property key, perform property update steps.
             if (name !== undefined) {
                 const ctor = this.constructor;
-                const options = ctor._classProperties.get(name) || defaultPropertyDeclaration;
+                const options = ctor.getPropertyOptions(name);
                 if (ctor._valueHasChanged(this[name], oldValue, options.hasChanged)) {
                     if (!this._changedProperties.has(name)) {
                         this._changedProperties.set(name, oldValue);
@@ -1948,7 +2024,7 @@
                 }
             }
             if (!this._hasRequestedUpdate && shouldRequestUpdate) {
-                this._enqueueUpdate();
+                this._updatePromise = this._enqueueUpdate();
             }
         }
         /**
@@ -1972,44 +2048,24 @@
          * Sets up the element to asynchronously update.
          */
         async _enqueueUpdate() {
-            // Mark state updating...
             this._updateState = this._updateState | STATE_UPDATE_REQUESTED;
-            let resolve;
-            let reject;
-            const previousUpdatePromise = this._updatePromise;
-            this._updatePromise = new Promise((res, rej) => {
-                resolve = res;
-                reject = rej;
-            });
             try {
                 // Ensure any previous update has resolved before updating.
                 // This `await` also ensures that property changes are batched.
-                await previousUpdatePromise;
+                await this._updatePromise;
             }
             catch (e) {
                 // Ignore any previous errors. We only care that the previous cycle is
                 // done. Any error should have been handled in the previous update.
             }
-            // Make sure the element has connected before updating.
-            if (!this._hasConnected) {
-                await new Promise((res) => this._hasConnectedResolver = res);
+            const result = this.performUpdate();
+            // If `performUpdate` returns a Promise, we await it. This is done to
+            // enable coordinating updates with a scheduler. Note, the result is
+            // checked to avoid delaying an additional microtask unless we need to.
+            if (result != null) {
+                await result;
             }
-            try {
-                const result = this.performUpdate();
-                // If `performUpdate` returns a Promise, we await it. This is done to
-                // enable coordinating updates with a scheduler. Note, the result is
-                // checked to avoid delaying an additional microtask unless we need to.
-                if (result != null) {
-                    await result;
-                }
-            }
-            catch (e) {
-                reject(e);
-            }
-            resolve(!this._hasRequestedUpdate);
-        }
-        get _hasConnected() {
-            return (this._updateState & STATE_HAS_CONNECTED);
+            return !this._hasRequestedUpdate;
         }
         get _hasRequestedUpdate() {
             return (this._updateState & STATE_UPDATE_REQUESTED);
@@ -2045,16 +2101,17 @@
                 if (shouldUpdate) {
                     this.update(changedProperties);
                 }
+                else {
+                    this._markUpdated();
+                }
             }
             catch (e) {
                 // Prevent `firstUpdated` and `updated` from running when there's an
                 // update exception.
                 shouldUpdate = false;
-                throw e;
-            }
-            finally {
                 // Ensure element can accept additional updates after an exception.
                 this._markUpdated();
+                throw e;
             }
             if (shouldUpdate) {
                 if (!(this._updateState & STATE_HAS_UPDATED)) {
@@ -2110,7 +2167,7 @@
          * an update. By default, this method always returns `true`, but this can be
          * customized to control when to update.
          *
-         * * @param _changedProperties Map of changed properties with old values
+         * @param _changedProperties Map of changed properties with old values
          */
         shouldUpdate(_changedProperties) {
             return true;
@@ -2121,7 +2178,7 @@
          * Setting properties inside this method will *not* trigger
          * another update.
          *
-         * * @param _changedProperties Map of changed properties with old values
+         * @param _changedProperties Map of changed properties with old values
          */
         update(_changedProperties) {
             if (this._reflectingProperties !== undefined &&
@@ -2131,6 +2188,7 @@
                 this._reflectingProperties.forEach((v, k) => this._propertyToAttribute(k, this[k], v));
                 this._reflectingProperties = undefined;
             }
+            this._markUpdated();
         }
         /**
          * Invoked whenever the element is updated. Implement to perform
@@ -2139,7 +2197,7 @@
          * Setting properties inside this method will trigger the element to update
          * again after this update cycle completes.
          *
-         * * @param _changedProperties Map of changed properties with old values
+         * @param _changedProperties Map of changed properties with old values
          */
         updated(_changedProperties) {
         }
@@ -2150,7 +2208,7 @@
          * Setting properties inside this method will trigger the element to update
          * again after this update cycle completes.
          *
-         * * @param _changedProperties Map of changed properties with old values
+         * @param _changedProperties Map of changed properties with old values
          */
         firstUpdated(_changedProperties) {
         }
@@ -2241,68 +2299,58 @@
     // This line will be used in regexes to search for LitElement usage.
     // TODO(justinfagnani): inject version number at build time
     (window['litElementVersions'] || (window['litElementVersions'] = []))
-        .push('2.2.1');
+        .push('2.3.1');
     /**
-     * Minimal implementation of Array.prototype.flat
-     * @param arr the array to flatten
-     * @param result the accumlated result
+     * Sentinal value used to avoid calling lit-html's render function when
+     * subclasses do not implement `render`
      */
-    function arrayFlat(styles, result = []) {
-        for (let i = 0, length = styles.length; i < length; i++) {
-            const value = styles[i];
-            if (Array.isArray(value)) {
-                arrayFlat(value, result);
-            }
-            else {
-                result.push(value);
-            }
-        }
-        return result;
-    }
-    /** Deeply flattens styles array. Uses native flat if available. */
-    const flattenStyles = (styles) => styles.flat ? styles.flat(Infinity) : arrayFlat(styles);
+    const renderNotImplemented = {};
     class LitElement extends UpdatingElement {
-        /** @nocollapse */
-        static finalize() {
-            // The Closure JS Compiler does not always preserve the correct "this"
-            // when calling static super methods (b/137460243), so explicitly bind.
-            super.finalize.call(this);
-            // Prepare styling that is stamped at first render time. Styling
-            // is built from user provided `styles` or is inherited from the superclass.
-            this._styles =
-                this.hasOwnProperty(JSCompiler_renameProperty('styles', this)) ?
-                    this._getUniqueStyles() :
-                    this._styles || [];
+        /**
+         * Return the array of styles to apply to the element.
+         * Override this method to integrate into a style management system.
+         *
+         * @nocollapse
+         */
+        static getStyles() {
+            return this.styles;
         }
         /** @nocollapse */
         static _getUniqueStyles() {
-            // Take care not to call `this.styles` multiple times since this generates
-            // new CSSResults each time.
+            // Only gather styles once per class
+            if (this.hasOwnProperty(JSCompiler_renameProperty('_styles', this))) {
+                return;
+            }
+            // Take care not to call `this.getStyles()` multiple times since this
+            // generates new CSSResults each time.
             // TODO(sorvell): Since we do not cache CSSResults by input, any
             // shared styles will generate new stylesheet objects, which is wasteful.
             // This should be addressed when a browser ships constructable
             // stylesheets.
-            const userStyles = this.styles;
-            const styles = [];
-            if (Array.isArray(userStyles)) {
-                const flatStyles = flattenStyles(userStyles);
-                // As a performance optimization to avoid duplicated styling that can
-                // occur especially when composing via subclassing, de-duplicate styles
-                // preserving the last item in the list. The last item is kept to
-                // try to preserve cascade order with the assumption that it's most
-                // important that last added styles override previous styles.
-                const styleSet = flatStyles.reduceRight((set, s) => {
-                    set.add(s);
-                    // on IE set.add does not return the set.
-                    return set;
-                }, new Set());
-                // Array.from does not work on Set in IE
-                styleSet.forEach((v) => styles.unshift(v));
+            const userStyles = this.getStyles();
+            if (userStyles === undefined) {
+                this._styles = [];
             }
-            else if (userStyles) {
-                styles.push(userStyles);
+            else if (Array.isArray(userStyles)) {
+                // De-duplicate styles preserving the _last_ instance in the set.
+                // This is a performance optimization to avoid duplicated styles that can
+                // occur especially when composing via subclassing.
+                // The last item is kept to try to preserve the cascade order with the
+                // assumption that it's most important that last added styles override
+                // previous styles.
+                const addStyles = (styles, set) => styles.reduceRight((set, s) => 
+                // Note: On IE set.add() does not return the set
+                Array.isArray(s) ? addStyles(s, set) : (set.add(s), set), set);
+                // Array.from does not work on Set in IE, otherwise return
+                // Array.from(addStyles(userStyles, new Set<CSSResult>())).reverse()
+                const set = addStyles(userStyles, new Set());
+                const styles = [];
+                set.forEach((v) => styles.unshift(v));
+                this._styles = styles;
             }
-            return styles;
+            else {
+                this._styles = [userStyles];
+            }
         }
         /**
          * Performs element initialization. By default this calls `createRenderRoot`
@@ -2311,6 +2359,7 @@
          */
         initialize() {
             super.initialize();
+            this.constructor._getUniqueStyles();
             this.renderRoot =
                 this.createRenderRoot();
             // Note, if renderRoot is not a shadowRoot, styles would/could apply to the
@@ -2374,12 +2423,16 @@
          * Updates the element. This method reflects property values to attributes
          * and calls `render` to render DOM via lit-html. Setting properties inside
          * this method will *not* trigger another update.
-         * * @param _changedProperties Map of changed properties with old values
+         * @param _changedProperties Map of changed properties with old values
          */
         update(changedProperties) {
-            super.update(changedProperties);
+            // Setting properties in `render` should not trigger an update. Since
+            // updates are allowed after super.update, it's important to call `render`
+            // before that.
             const templateResult = this.render();
-            if (templateResult instanceof TemplateResult) {
+            super.update(changedProperties);
+            // If render is not implemented by the component, don't call lit-html render
+            if (templateResult !== renderNotImplemented) {
                 this.constructor
                     .render(templateResult, this.renderRoot, { scopeName: this.localName, eventContext: this });
             }
@@ -2396,11 +2449,13 @@
             }
         }
         /**
-         * Invoked on each update to perform rendering tasks. This method must return
-         * a lit-html TemplateResult. Setting properties inside this method will *not*
-         * trigger the element to update.
+         * Invoked on each update to perform rendering tasks. This method may return
+         * any value renderable by lit-html's NodePart - typically a TemplateResult.
+         * Setting properties inside this method will *not* trigger the element to
+         * update.
          */
         render() {
+            return renderNotImplemented;
         }
     }
     /**
@@ -2412,11 +2467,10 @@
      */
     LitElement['finalized'] = true;
     /**
-     * Render method used to render the lit-html TemplateResult to the element's
-     * DOM.
-     * @param {TemplateResult} Template to render.
-     * @param {Element|DocumentFragment} Node into which to render.
-     * @param {String} Element name.
+     * Render method used to render the value to the element's DOM.
+     * @param result The value to render.
+     * @param container Node into which to render.
+     * @param options Element name.
      * @nocollapse
      */
     LitElement.render = render$1;
@@ -2922,7 +2976,7 @@
         if (node.sublayers){
           return html`<li @click="${e=>this.toggleOpen(e, node)}">
             <div class="folder-icon"><div class="folder-tab"></div><div class="folder-sheet"></div></div> ${node.title}
-            <span class="arrow-down"></span>
+            <span class="arrow-down${node.opened?' opened':''}"></span>
             ${this.renderTree(node.sublayers, node.opened, this.isRadioNode(node), node.id)}</li>`
         } else {
           if (opened && node.type === 'getcapabilities') {
@@ -3296,10 +3350,10 @@ width="24px" height="30px" viewBox="0 0 24 30" style="enable-background:new 0 0 
       }
       copyCoords(e) {
         const copy = this.shadowRoot.querySelector('#copied');
-        copy.innerHTML = `${this.clickpoint[0].toFixed(this.factor)} ${this.clickpoint[1].toFixed(this.factor)}`;
+        copy.innerHTML = `${this.clickpoint[0].toFixed(this.factor)},${this.clickpoint[1].toFixed(this.factor)}`;
         window.getSelection().removeAllRanges();
         const range = document.createRange();
-        range.selectNode(copy);
+        range.selectNodeContents(copy);
         window.getSelection().addRange(range);
         document.execCommand("copy");
         window.getSelection().removeAllRanges();
@@ -8661,6 +8715,13 @@ input[type=range]:focus::-ms-fill-upper {
         );
       }
       shouldUpdate(changedProps) {
+        if (changedProps.has('active')) {
+          this.dispatchEvent(new CustomEvent("infomode", {
+            detail: this.active,
+            bubbles: true,
+            composed: true
+          }));
+        }
         return this.active;
       }
       render() {
@@ -8780,12 +8841,17 @@ input[type=range]:focus::-ms-fill-upper {
         return result;
       }
       renderAttribute(key, value) {
+        let isImage = (typeof value === 'string') && 
+          (value.startsWith('https://maps.googleapis.com') || 
+            (
+              (value.startsWith('https://') || value.startsWith('https://')) && 
+              (value.endsWith('.png') || value.endsWith('.jpg')  || value.endsWith('.gif') || value.endsWith('.svg'))
+            )
+          );
         return html`<div class="attributename">${key}</div>
     <div class="attributevalue">${typeof value === 'object' && value !== null?
           JSON.stringify(value)
-        :typeof value === 'string' && value.startsWith('https://maps.googleapis.com')?
-            html`<img src="${value}">`
-          :value}</div>`
+        :isImage?html`<img src="${value}" width="95%">`:value}</div>`
       }
     }
     customElements.define('map-info-formatted', MapInfoFormatted);
@@ -17143,28 +17209,11 @@ input[type=range]:focus::-ms-fill-upper {
      * subject to an additional IP rights grant found at
      * http://polymer.github.io/PATENTS.txt
      */
-    const directives$1 = new WeakMap();
-    const isDirective$1 = (o) => {
-        return typeof o === 'function' && directives$1.has(o);
-    };
-
-    /**
-     * @license
-     * Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
-     * This code may only be used under the BSD style license found at
-     * http://polymer.github.io/LICENSE.txt
-     * The complete set of authors may be found at
-     * http://polymer.github.io/AUTHORS.txt
-     * The complete set of contributors may be found at
-     * http://polymer.github.io/CONTRIBUTORS.txt
-     * Code distributed by Google as part of the polymer project is also
-     * subject to an additional IP rights grant found at
-     * http://polymer.github.io/PATENTS.txt
-     */
     /**
      * True if the custom elements polyfill is in use.
      */
-    const isCEPolyfill$1 = window.customElements !== undefined &&
+    const isCEPolyfill$1 = typeof window !== 'undefined' &&
+        window.customElements != null &&
         window.customElements.polyfillWrapFlushCallback !==
             undefined;
     /**
@@ -17178,29 +17227,6 @@ input[type=range]:focus::-ms-fill-upper {
             start = n;
         }
     };
-
-    /**
-     * @license
-     * Copyright (c) 2018 The Polymer Project Authors. All rights reserved.
-     * This code may only be used under the BSD style license found at
-     * http://polymer.github.io/LICENSE.txt
-     * The complete set of authors may be found at
-     * http://polymer.github.io/AUTHORS.txt
-     * The complete set of contributors may be found at
-     * http://polymer.github.io/CONTRIBUTORS.txt
-     * Code distributed by Google as part of the polymer project is also
-     * subject to an additional IP rights grant found at
-     * http://polymer.github.io/PATENTS.txt
-     */
-    /**
-     * A sentinel value that signals that a value was handled by a directive and
-     * should not be written to the DOM.
-     */
-    const noChange$1 = {};
-    /**
-     * A sentinel value that signals a NodePart to fully clear its content.
-     */
-    const nothing$1 = {};
 
     /**
      * @license
@@ -17231,7 +17257,7 @@ input[type=range]:focus::-ms-fill-upper {
      */
     const boundAttributeSuffix$1 = '$lit$';
     /**
-     * An updateable Template that tracks the location of dynamic parts.
+     * An updatable Template that tracks the location of dynamic parts.
      */
     class Template$1 {
         constructor(result, element) {
@@ -17413,7 +17439,174 @@ input[type=range]:focus::-ms-fill-upper {
      *    * (") then any non-("), or
      *    * (') then any non-(')
      */
-    const lastAttributeNameRegex$1 = /([ \x09\x0a\x0c\x0d])([^\0-\x1F\x7F-\x9F "'>=/]+)([ \x09\x0a\x0c\x0d]*=[ \x09\x0a\x0c\x0d]*(?:[^ \x09\x0a\x0c\x0d"'`<>=]*|"[^"]*|'[^']*))$/;
+    const lastAttributeNameRegex$1 = 
+    // eslint-disable-next-line no-control-regex
+    /([ \x09\x0a\x0c\x0d])([^\0-\x1F\x7F-\x9F "'>=/]+)([ \x09\x0a\x0c\x0d]*=[ \x09\x0a\x0c\x0d]*(?:[^ \x09\x0a\x0c\x0d"'`<>=]*|"[^"]*|'[^']*))$/;
+
+    /**
+     * @license
+     * Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
+     * This code may only be used under the BSD style license found at
+     * http://polymer.github.io/LICENSE.txt
+     * The complete set of authors may be found at
+     * http://polymer.github.io/AUTHORS.txt
+     * The complete set of contributors may be found at
+     * http://polymer.github.io/CONTRIBUTORS.txt
+     * Code distributed by Google as part of the polymer project is also
+     * subject to an additional IP rights grant found at
+     * http://polymer.github.io/PATENTS.txt
+     */
+    const walkerNodeFilter$1 = 133 /* NodeFilter.SHOW_{ELEMENT|COMMENT|TEXT} */;
+    /**
+     * Removes the list of nodes from a Template safely. In addition to removing
+     * nodes from the Template, the Template part indices are updated to match
+     * the mutated Template DOM.
+     *
+     * As the template is walked the removal state is tracked and
+     * part indices are adjusted as needed.
+     *
+     * div
+     *   div#1 (remove) <-- start removing (removing node is div#1)
+     *     div
+     *       div#2 (remove)  <-- continue removing (removing node is still div#1)
+     *         div
+     * div <-- stop removing since previous sibling is the removing node (div#1,
+     * removed 4 nodes)
+     */
+    function removeNodesFromTemplate$1(template, nodesToRemove) {
+        const { element: { content }, parts } = template;
+        const walker = document.createTreeWalker(content, walkerNodeFilter$1, null, false);
+        let partIndex = nextActiveIndexInTemplateParts$1(parts);
+        let part = parts[partIndex];
+        let nodeIndex = -1;
+        let removeCount = 0;
+        const nodesToRemoveInTemplate = [];
+        let currentRemovingNode = null;
+        while (walker.nextNode()) {
+            nodeIndex++;
+            const node = walker.currentNode;
+            // End removal if stepped past the removing node
+            if (node.previousSibling === currentRemovingNode) {
+                currentRemovingNode = null;
+            }
+            // A node to remove was found in the template
+            if (nodesToRemove.has(node)) {
+                nodesToRemoveInTemplate.push(node);
+                // Track node we're removing
+                if (currentRemovingNode === null) {
+                    currentRemovingNode = node;
+                }
+            }
+            // When removing, increment count by which to adjust subsequent part indices
+            if (currentRemovingNode !== null) {
+                removeCount++;
+            }
+            while (part !== undefined && part.index === nodeIndex) {
+                // If part is in a removed node deactivate it by setting index to -1 or
+                // adjust the index as needed.
+                part.index = currentRemovingNode !== null ? -1 : part.index - removeCount;
+                // go to the next active part.
+                partIndex = nextActiveIndexInTemplateParts$1(parts, partIndex);
+                part = parts[partIndex];
+            }
+        }
+        nodesToRemoveInTemplate.forEach((n) => n.parentNode.removeChild(n));
+    }
+    const countNodes$1 = (node) => {
+        let count = (node.nodeType === 11 /* Node.DOCUMENT_FRAGMENT_NODE */) ? 0 : 1;
+        const walker = document.createTreeWalker(node, walkerNodeFilter$1, null, false);
+        while (walker.nextNode()) {
+            count++;
+        }
+        return count;
+    };
+    const nextActiveIndexInTemplateParts$1 = (parts, startIndex = -1) => {
+        for (let i = startIndex + 1; i < parts.length; i++) {
+            const part = parts[i];
+            if (isTemplatePartActive$1(part)) {
+                return i;
+            }
+        }
+        return -1;
+    };
+    /**
+     * Inserts the given node into the Template, optionally before the given
+     * refNode. In addition to inserting the node into the Template, the Template
+     * part indices are updated to match the mutated Template DOM.
+     */
+    function insertNodeIntoTemplate$1(template, node, refNode = null) {
+        const { element: { content }, parts } = template;
+        // If there's no refNode, then put node at end of template.
+        // No part indices need to be shifted in this case.
+        if (refNode === null || refNode === undefined) {
+            content.appendChild(node);
+            return;
+        }
+        const walker = document.createTreeWalker(content, walkerNodeFilter$1, null, false);
+        let partIndex = nextActiveIndexInTemplateParts$1(parts);
+        let insertCount = 0;
+        let walkerIndex = -1;
+        while (walker.nextNode()) {
+            walkerIndex++;
+            const walkerNode = walker.currentNode;
+            if (walkerNode === refNode) {
+                insertCount = countNodes$1(node);
+                refNode.parentNode.insertBefore(node, refNode);
+            }
+            while (partIndex !== -1 && parts[partIndex].index === walkerIndex) {
+                // If we've inserted the node, simply adjust all subsequent parts
+                if (insertCount > 0) {
+                    while (partIndex !== -1) {
+                        parts[partIndex].index += insertCount;
+                        partIndex = nextActiveIndexInTemplateParts$1(parts, partIndex);
+                    }
+                    return;
+                }
+                partIndex = nextActiveIndexInTemplateParts$1(parts, partIndex);
+            }
+        }
+    }
+
+    /**
+     * @license
+     * Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
+     * This code may only be used under the BSD style license found at
+     * http://polymer.github.io/LICENSE.txt
+     * The complete set of authors may be found at
+     * http://polymer.github.io/AUTHORS.txt
+     * The complete set of contributors may be found at
+     * http://polymer.github.io/CONTRIBUTORS.txt
+     * Code distributed by Google as part of the polymer project is also
+     * subject to an additional IP rights grant found at
+     * http://polymer.github.io/PATENTS.txt
+     */
+    const directives$1 = new WeakMap();
+    const isDirective$1 = (o) => {
+        return typeof o === 'function' && directives$1.has(o);
+    };
+
+    /**
+     * @license
+     * Copyright (c) 2018 The Polymer Project Authors. All rights reserved.
+     * This code may only be used under the BSD style license found at
+     * http://polymer.github.io/LICENSE.txt
+     * The complete set of authors may be found at
+     * http://polymer.github.io/AUTHORS.txt
+     * The complete set of contributors may be found at
+     * http://polymer.github.io/CONTRIBUTORS.txt
+     * Code distributed by Google as part of the polymer project is also
+     * subject to an additional IP rights grant found at
+     * http://polymer.github.io/PATENTS.txt
+     */
+    /**
+     * A sentinel value that signals that a value was handled by a directive and
+     * should not be written to the DOM.
+     */
+    const noChange$1 = {};
+    /**
+     * A sentinel value that signals a NodePart to fully clear its content.
+     */
+    const nothing$1 = {};
 
     /**
      * @license
@@ -17474,7 +17667,7 @@ input[type=range]:focus::-ms-fill-upper {
             // Given these constraints, with full custom elements support we would
             // prefer the order: Clone, Process, Adopt, Upgrade, Update, Connect
             //
-            // But Safari dooes not implement CustomElementRegistry#upgrade, so we
+            // But Safari does not implement CustomElementRegistry#upgrade, so we
             // can not implement that order and still have upgrade-before-update and
             // upgrade disconnected fragments. So we instead sacrifice the
             // process-before-upgrade constraint, since in Custom Elements v1 elements
@@ -17584,7 +17777,7 @@ input[type=range]:focus::-ms-fill-upper {
                 // For each binding we want to determine the kind of marker to insert
                 // into the template source before it's parsed by the browser's HTML
                 // parser. The marker type is based on whether the expression is in an
-                // attribute, text, or comment poisition.
+                // attribute, text, or comment position.
                 //   * For node-position bindings we insert a comment with the marker
                 //     sentinel as its text content, like <!--{{lit-guid}}-->.
                 //   * For attribute bindings we insert just the marker sentinel for the
@@ -17604,13 +17797,13 @@ input[type=range]:focus::-ms-fill-upper {
                 // be false positives.
                 isCommentBinding = (commentOpen > -1 || isCommentBinding) &&
                     s.indexOf('-->', commentOpen + 1) === -1;
-                // Check to see if we have an attribute-like sequence preceeding the
+                // Check to see if we have an attribute-like sequence preceding the
                 // expression. This can match "name=value" like structures in text,
                 // comments, and attribute values, so there can be false-positives.
                 const attributeMatch = lastAttributeNameRegex$1.exec(s);
                 if (attributeMatch === null) {
                     // We're only in this branch if we don't have a attribute-like
-                    // preceeding sequence. For comments, this guards against unusual
+                    // preceding sequence. For comments, this guards against unusual
                     // attribute values like <div foo="<!--${'bar'}">. Cases like
                     // <!-- foo=${'bar'}--> are handled correctly in the attribute branch
                     // below.
@@ -17654,12 +17847,12 @@ input[type=range]:focus::-ms-fill-upper {
     };
     const isIterable$1 = (value) => {
         return Array.isArray(value) ||
-            // tslint:disable-next-line:no-any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             !!(value && value[Symbol.iterator]);
     };
     /**
      * Writes attribute values to the DOM for a group of AttributeParts bound to a
-     * single attibute. The value is only set once even if there are multiple parts
+     * single attribute. The value is only set once even if there are multiple parts
      * for an attribute.
      */
     class AttributeCommitter$1 {
@@ -17796,6 +17989,9 @@ input[type=range]:focus::-ms-fill-upper {
             this.__pendingValue = value;
         }
         commit() {
+            if (this.startNode.parentNode === null) {
+                return;
+            }
             while (isDirective$1(this.__pendingValue)) {
                 const directive = this.__pendingValue;
                 this.__pendingValue = noChange$1;
@@ -17992,7 +18188,7 @@ input[type=range]:focus::-ms-fill-upper {
         commit() {
             if (this.dirty) {
                 this.dirty = false;
-                // tslint:disable-next-line:no-any
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 this.element[this.name] = this._getValue();
             }
         }
@@ -18000,24 +18196,29 @@ input[type=range]:focus::-ms-fill-upper {
     class PropertyPart$1 extends AttributePart$1 {
     }
     // Detect event listener options support. If the `capture` property is read
-    // from the options object, then options are supported. If not, then the thrid
+    // from the options object, then options are supported. If not, then the third
     // argument to add/removeEventListener is interpreted as the boolean capture
     // value so we should only pass the `capture` property.
     let eventOptionsSupported$1 = false;
-    try {
-        const options = {
-            get capture() {
-                eventOptionsSupported$1 = true;
-                return false;
-            }
-        };
-        // tslint:disable-next-line:no-any
-        window.addEventListener('test', options, options);
-        // tslint:disable-next-line:no-any
-        window.removeEventListener('test', options, options);
-    }
-    catch (_e) {
-    }
+    // Wrap into an IIFE because MS Edge <= v41 does not support having try/catch
+    // blocks right into the body of a module
+    (() => {
+        try {
+            const options = {
+                get capture() {
+                    eventOptionsSupported$1 = true;
+                    return false;
+                }
+            };
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            window.addEventListener('test', options, options);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            window.removeEventListener('test', options, options);
+        }
+        catch (_e) {
+            // event options not supported
+        }
+    })();
     class EventPart$1 {
         constructor(element, eventName, eventContext) {
             this.value = undefined;
@@ -18073,57 +18274,6 @@ input[type=range]:focus::-ms-fill-upper {
         (eventOptionsSupported$1 ?
             { capture: o.capture, passive: o.passive, once: o.once } :
             o.capture);
-
-    /**
-     * @license
-     * Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
-     * This code may only be used under the BSD style license found at
-     * http://polymer.github.io/LICENSE.txt
-     * The complete set of authors may be found at
-     * http://polymer.github.io/AUTHORS.txt
-     * The complete set of contributors may be found at
-     * http://polymer.github.io/CONTRIBUTORS.txt
-     * Code distributed by Google as part of the polymer project is also
-     * subject to an additional IP rights grant found at
-     * http://polymer.github.io/PATENTS.txt
-     */
-    /**
-     * Creates Parts when a template is instantiated.
-     */
-    class DefaultTemplateProcessor$1 {
-        /**
-         * Create parts for an attribute-position binding, given the event, attribute
-         * name, and string literals.
-         *
-         * @param element The element containing the binding
-         * @param name  The attribute name
-         * @param strings The string literals. There are always at least two strings,
-         *   event for fully-controlled bindings with a single expression.
-         */
-        handleAttributeExpressions(element, name, strings, options) {
-            const prefix = name[0];
-            if (prefix === '.') {
-                const committer = new PropertyCommitter$1(element, name.slice(1), strings);
-                return committer.parts;
-            }
-            if (prefix === '@') {
-                return [new EventPart$1(element, name.slice(1), options.eventContext)];
-            }
-            if (prefix === '?') {
-                return [new BooleanAttributePart$1(element, name.slice(1), strings)];
-            }
-            const committer = new AttributeCommitter$1(element, name, strings);
-            return committer.parts;
-        }
-        /**
-         * Create parts for a text-position binding.
-         * @param templateFactory
-         */
-        handleTextExpression(options) {
-            return new NodePart$1(options);
-        }
-    }
-    const defaultTemplateProcessor$1 = new DefaultTemplateProcessor$1();
 
     /**
      * @license
@@ -18225,15 +18375,43 @@ input[type=range]:focus::-ms-fill-upper {
      * subject to an additional IP rights grant found at
      * http://polymer.github.io/PATENTS.txt
      */
-    // IMPORTANT: do not change the property name or the assignment expression.
-    // This line will be used in regexes to search for lit-html usage.
-    // TODO(justinfagnani): inject version number at build time
-    (window['litHtmlVersions'] || (window['litHtmlVersions'] = [])).push('1.1.2');
     /**
-     * Interprets a template literal as an HTML template that can efficiently
-     * render to and update a container.
+     * Creates Parts when a template is instantiated.
      */
-    const html$1 = (strings, ...values) => new TemplateResult$1(strings, values, 'html', defaultTemplateProcessor$1);
+    class DefaultTemplateProcessor$1 {
+        /**
+         * Create parts for an attribute-position binding, given the event, attribute
+         * name, and string literals.
+         *
+         * @param element The element containing the binding
+         * @param name  The attribute name
+         * @param strings The string literals. There are always at least two strings,
+         *   event for fully-controlled bindings with a single expression.
+         */
+        handleAttributeExpressions(element, name, strings, options) {
+            const prefix = name[0];
+            if (prefix === '.') {
+                const committer = new PropertyCommitter$1(element, name.slice(1), strings);
+                return committer.parts;
+            }
+            if (prefix === '@') {
+                return [new EventPart$1(element, name.slice(1), options.eventContext)];
+            }
+            if (prefix === '?') {
+                return [new BooleanAttributePart$1(element, name.slice(1), strings)];
+            }
+            const committer = new AttributeCommitter$1(element, name, strings);
+            return committer.parts;
+        }
+        /**
+         * Create parts for a text-position binding.
+         * @param templateFactory
+         */
+        handleTextExpression(options) {
+            return new NodePart$1(options);
+        }
+    }
+    const defaultTemplateProcessor$1 = new DefaultTemplateProcessor$1();
 
     /**
      * @license
@@ -18248,116 +18426,17 @@ input[type=range]:focus::-ms-fill-upper {
      * subject to an additional IP rights grant found at
      * http://polymer.github.io/PATENTS.txt
      */
-    const walkerNodeFilter$1 = 133 /* NodeFilter.SHOW_{ELEMENT|COMMENT|TEXT} */;
-    /**
-     * Removes the list of nodes from a Template safely. In addition to removing
-     * nodes from the Template, the Template part indices are updated to match
-     * the mutated Template DOM.
-     *
-     * As the template is walked the removal state is tracked and
-     * part indices are adjusted as needed.
-     *
-     * div
-     *   div#1 (remove) <-- start removing (removing node is div#1)
-     *     div
-     *       div#2 (remove)  <-- continue removing (removing node is still div#1)
-     *         div
-     * div <-- stop removing since previous sibling is the removing node (div#1,
-     * removed 4 nodes)
-     */
-    function removeNodesFromTemplate$1(template, nodesToRemove) {
-        const { element: { content }, parts } = template;
-        const walker = document.createTreeWalker(content, walkerNodeFilter$1, null, false);
-        let partIndex = nextActiveIndexInTemplateParts$1(parts);
-        let part = parts[partIndex];
-        let nodeIndex = -1;
-        let removeCount = 0;
-        const nodesToRemoveInTemplate = [];
-        let currentRemovingNode = null;
-        while (walker.nextNode()) {
-            nodeIndex++;
-            const node = walker.currentNode;
-            // End removal if stepped past the removing node
-            if (node.previousSibling === currentRemovingNode) {
-                currentRemovingNode = null;
-            }
-            // A node to remove was found in the template
-            if (nodesToRemove.has(node)) {
-                nodesToRemoveInTemplate.push(node);
-                // Track node we're removing
-                if (currentRemovingNode === null) {
-                    currentRemovingNode = node;
-                }
-            }
-            // When removing, increment count by which to adjust subsequent part indices
-            if (currentRemovingNode !== null) {
-                removeCount++;
-            }
-            while (part !== undefined && part.index === nodeIndex) {
-                // If part is in a removed node deactivate it by setting index to -1 or
-                // adjust the index as needed.
-                part.index = currentRemovingNode !== null ? -1 : part.index - removeCount;
-                // go to the next active part.
-                partIndex = nextActiveIndexInTemplateParts$1(parts, partIndex);
-                part = parts[partIndex];
-            }
-        }
-        nodesToRemoveInTemplate.forEach((n) => n.parentNode.removeChild(n));
+    // IMPORTANT: do not change the property name or the assignment expression.
+    // This line will be used in regexes to search for lit-html usage.
+    // TODO(justinfagnani): inject version number at build time
+    if (typeof window !== 'undefined') {
+        (window['litHtmlVersions'] || (window['litHtmlVersions'] = [])).push('1.2.1');
     }
-    const countNodes$1 = (node) => {
-        let count = (node.nodeType === 11 /* Node.DOCUMENT_FRAGMENT_NODE */) ? 0 : 1;
-        const walker = document.createTreeWalker(node, walkerNodeFilter$1, null, false);
-        while (walker.nextNode()) {
-            count++;
-        }
-        return count;
-    };
-    const nextActiveIndexInTemplateParts$1 = (parts, startIndex = -1) => {
-        for (let i = startIndex + 1; i < parts.length; i++) {
-            const part = parts[i];
-            if (isTemplatePartActive$1(part)) {
-                return i;
-            }
-        }
-        return -1;
-    };
     /**
-     * Inserts the given node into the Template, optionally before the given
-     * refNode. In addition to inserting the node into the Template, the Template
-     * part indices are updated to match the mutated Template DOM.
+     * Interprets a template literal as an HTML template that can efficiently
+     * render to and update a container.
      */
-    function insertNodeIntoTemplate$1(template, node, refNode = null) {
-        const { element: { content }, parts } = template;
-        // If there's no refNode, then put node at end of template.
-        // No part indices need to be shifted in this case.
-        if (refNode === null || refNode === undefined) {
-            content.appendChild(node);
-            return;
-        }
-        const walker = document.createTreeWalker(content, walkerNodeFilter$1, null, false);
-        let partIndex = nextActiveIndexInTemplateParts$1(parts);
-        let insertCount = 0;
-        let walkerIndex = -1;
-        while (walker.nextNode()) {
-            walkerIndex++;
-            const walkerNode = walker.currentNode;
-            if (walkerNode === refNode) {
-                insertCount = countNodes$1(node);
-                refNode.parentNode.insertBefore(node, refNode);
-            }
-            while (partIndex !== -1 && parts[partIndex].index === walkerIndex) {
-                // If we've inserted the node, simply adjust all subsequent parts
-                if (insertCount > 0) {
-                    while (partIndex !== -1) {
-                        parts[partIndex].index += insertCount;
-                        partIndex = nextActiveIndexInTemplateParts$1(parts, partIndex);
-                    }
-                    return;
-                }
-                partIndex = nextActiveIndexInTemplateParts$1(parts, partIndex);
-            }
-        }
-    }
+    const html$1 = (strings, ...values) => new TemplateResult$1(strings, values, 'html', defaultTemplateProcessor$1);
 
     /**
      * @license
@@ -18691,12 +18770,10 @@ input[type=range]:focus::-ms-fill-upper {
         reflect: false,
         hasChanged: notEqual$1
     };
-    const microtaskPromise$1 = Promise.resolve(true);
     const STATE_HAS_UPDATED$1 = 1;
     const STATE_UPDATE_REQUESTED$1 = 1 << 2;
     const STATE_IS_REFLECTING_TO_ATTRIBUTE$1 = 1 << 3;
     const STATE_IS_REFLECTING_TO_PROPERTY$1 = 1 << 4;
-    const STATE_HAS_CONNECTED$1 = 1 << 5;
     /**
      * The Closure JS Compiler doesn't currently have good support for static
      * property semantics where "this" is dynamic (e.g.
@@ -18714,8 +18791,9 @@ input[type=range]:focus::-ms-fill-upper {
             super();
             this._updateState = 0;
             this._instanceProperties = undefined;
-            this._updatePromise = microtaskPromise$1;
-            this._hasConnectedResolver = undefined;
+            // Initialize to an unresolved Promise so we can make sure the element has
+            // connected before first update.
+            this._updatePromise = new Promise((res) => this._enableUpdatingResolver = res);
             /**
              * Map with keys for any properties that have changed since the last
              * update cycle with previous values.
@@ -18764,10 +18842,25 @@ input[type=range]:focus::-ms-fill-upper {
             }
         }
         /**
-         * Creates a property accessor on the element prototype if one does not exist.
+         * Creates a property accessor on the element prototype if one does not exist
+         * and stores a PropertyDeclaration for the property with the given options.
          * The property setter calls the property's `hasChanged` property option
          * or uses a strict identity check to determine whether or not to request
          * an update.
+         *
+         * This method may be overridden to customize properties; however,
+         * when doing so, it's important to call `super.createProperty` to ensure
+         * the property is setup correctly. This method calls
+         * `getPropertyDescriptor` internally to get a descriptor to install.
+         * To customize what properties do when they are get or set, override
+         * `getPropertyDescriptor`. To customize the options for a property,
+         * implement `createProperty` like this:
+         *
+         * static createProperty(name, options) {
+         *   options = Object.assign(options, {myOption: true});
+         *   super.createProperty(name, options);
+         * }
+         *
          * @nocollapse
          */
         static createProperty(name, options = defaultPropertyDeclaration$1) {
@@ -18785,7 +18878,37 @@ input[type=range]:focus::-ms-fill-upper {
                 return;
             }
             const key = typeof name === 'symbol' ? Symbol() : `__${name}`;
-            Object.defineProperty(this.prototype, name, {
+            const descriptor = this.getPropertyDescriptor(name, key, options);
+            if (descriptor !== undefined) {
+                Object.defineProperty(this.prototype, name, descriptor);
+            }
+        }
+        /**
+         * Returns a property descriptor to be defined on the given named property.
+         * If no descriptor is returned, the property will not become an accessor.
+         * For example,
+         *
+         *   class MyElement extends LitElement {
+         *     static getPropertyDescriptor(name, key, options) {
+         *       const defaultDescriptor =
+         *           super.getPropertyDescriptor(name, key, options);
+         *       const setter = defaultDescriptor.set;
+         *       return {
+         *         get: defaultDescriptor.get,
+         *         set(value) {
+         *           setter.call(this, value);
+         *           // custom action.
+         *         },
+         *         configurable: true,
+         *         enumerable: true
+         *       }
+         *     }
+         *   }
+         *
+         * @nocollapse
+         */
+        static getPropertyDescriptor(name, key, _options) {
+            return {
                 // tslint:disable-next-line:no-any no symbol in index
                 get() {
                     return this[key];
@@ -18797,7 +18920,23 @@ input[type=range]:focus::-ms-fill-upper {
                 },
                 configurable: true,
                 enumerable: true
-            });
+            };
+        }
+        /**
+         * Returns the property options associated with the given property.
+         * These options are defined with a PropertyDeclaration via the `properties`
+         * object or the `@property` decorator and are registered in
+         * `createProperty(...)`.
+         *
+         * Note, this method should be considered "final" and not overridden. To
+         * customize the options for a given property, override `createProperty`.
+         *
+         * @nocollapse
+         * @final
+         */
+        static getPropertyOptions(name) {
+            return this._classProperties && this._classProperties.get(name) ||
+                defaultPropertyDeclaration$1;
         }
         /**
          * Creates property accessors for registered properties and ensures
@@ -18935,14 +19074,14 @@ input[type=range]:focus::-ms-fill-upper {
             this._instanceProperties = undefined;
         }
         connectedCallback() {
-            this._updateState = this._updateState | STATE_HAS_CONNECTED$1;
             // Ensure first connection completes an update. Updates cannot complete
-            // before connection and if one is pending connection the
-            // `_hasConnectionResolver` will exist. If so, resolve it to complete the
-            // update, otherwise requestUpdate.
-            if (this._hasConnectedResolver) {
-                this._hasConnectedResolver();
-                this._hasConnectedResolver = undefined;
+            // before connection.
+            this.enableUpdating();
+        }
+        enableUpdating() {
+            if (this._enableUpdatingResolver !== undefined) {
+                this._enableUpdatingResolver();
+                this._enableUpdatingResolver = undefined;
             }
         }
         /**
@@ -18995,9 +19134,12 @@ input[type=range]:focus::-ms-fill-upper {
                 return;
             }
             const ctor = this.constructor;
+            // Note, hint this as an `AttributeMap` so closure clearly understands
+            // the type; it has issues with tracking types through statics
+            // tslint:disable-next-line:no-unnecessary-type-assertion
             const propName = ctor._attributeToPropertyMap.get(name);
             if (propName !== undefined) {
-                const options = ctor._classProperties.get(propName) || defaultPropertyDeclaration$1;
+                const options = ctor.getPropertyOptions(propName);
                 // mark state reflecting
                 this._updateState = this._updateState | STATE_IS_REFLECTING_TO_PROPERTY$1;
                 this[propName] =
@@ -19017,7 +19159,7 @@ input[type=range]:focus::-ms-fill-upper {
             // If we have a property key, perform property update steps.
             if (name !== undefined) {
                 const ctor = this.constructor;
-                const options = ctor._classProperties.get(name) || defaultPropertyDeclaration$1;
+                const options = ctor.getPropertyOptions(name);
                 if (ctor._valueHasChanged(this[name], oldValue, options.hasChanged)) {
                     if (!this._changedProperties.has(name)) {
                         this._changedProperties.set(name, oldValue);
@@ -19040,7 +19182,7 @@ input[type=range]:focus::-ms-fill-upper {
                 }
             }
             if (!this._hasRequestedUpdate && shouldRequestUpdate) {
-                this._enqueueUpdate();
+                this._updatePromise = this._enqueueUpdate();
             }
         }
         /**
@@ -19064,44 +19206,24 @@ input[type=range]:focus::-ms-fill-upper {
          * Sets up the element to asynchronously update.
          */
         async _enqueueUpdate() {
-            // Mark state updating...
             this._updateState = this._updateState | STATE_UPDATE_REQUESTED$1;
-            let resolve;
-            let reject;
-            const previousUpdatePromise = this._updatePromise;
-            this._updatePromise = new Promise((res, rej) => {
-                resolve = res;
-                reject = rej;
-            });
             try {
                 // Ensure any previous update has resolved before updating.
                 // This `await` also ensures that property changes are batched.
-                await previousUpdatePromise;
+                await this._updatePromise;
             }
             catch (e) {
                 // Ignore any previous errors. We only care that the previous cycle is
                 // done. Any error should have been handled in the previous update.
             }
-            // Make sure the element has connected before updating.
-            if (!this._hasConnected) {
-                await new Promise((res) => this._hasConnectedResolver = res);
+            const result = this.performUpdate();
+            // If `performUpdate` returns a Promise, we await it. This is done to
+            // enable coordinating updates with a scheduler. Note, the result is
+            // checked to avoid delaying an additional microtask unless we need to.
+            if (result != null) {
+                await result;
             }
-            try {
-                const result = this.performUpdate();
-                // If `performUpdate` returns a Promise, we await it. This is done to
-                // enable coordinating updates with a scheduler. Note, the result is
-                // checked to avoid delaying an additional microtask unless we need to.
-                if (result != null) {
-                    await result;
-                }
-            }
-            catch (e) {
-                reject(e);
-            }
-            resolve(!this._hasRequestedUpdate);
-        }
-        get _hasConnected() {
-            return (this._updateState & STATE_HAS_CONNECTED$1);
+            return !this._hasRequestedUpdate;
         }
         get _hasRequestedUpdate() {
             return (this._updateState & STATE_UPDATE_REQUESTED$1);
@@ -19137,16 +19259,17 @@ input[type=range]:focus::-ms-fill-upper {
                 if (shouldUpdate) {
                     this.update(changedProperties);
                 }
+                else {
+                    this._markUpdated();
+                }
             }
             catch (e) {
                 // Prevent `firstUpdated` and `updated` from running when there's an
                 // update exception.
                 shouldUpdate = false;
-                throw e;
-            }
-            finally {
                 // Ensure element can accept additional updates after an exception.
                 this._markUpdated();
+                throw e;
             }
             if (shouldUpdate) {
                 if (!(this._updateState & STATE_HAS_UPDATED$1)) {
@@ -19202,7 +19325,7 @@ input[type=range]:focus::-ms-fill-upper {
          * an update. By default, this method always returns `true`, but this can be
          * customized to control when to update.
          *
-         * * @param _changedProperties Map of changed properties with old values
+         * @param _changedProperties Map of changed properties with old values
          */
         shouldUpdate(_changedProperties) {
             return true;
@@ -19213,7 +19336,7 @@ input[type=range]:focus::-ms-fill-upper {
          * Setting properties inside this method will *not* trigger
          * another update.
          *
-         * * @param _changedProperties Map of changed properties with old values
+         * @param _changedProperties Map of changed properties with old values
          */
         update(_changedProperties) {
             if (this._reflectingProperties !== undefined &&
@@ -19223,6 +19346,7 @@ input[type=range]:focus::-ms-fill-upper {
                 this._reflectingProperties.forEach((v, k) => this._propertyToAttribute(k, this[k], v));
                 this._reflectingProperties = undefined;
             }
+            this._markUpdated();
         }
         /**
          * Invoked whenever the element is updated. Implement to perform
@@ -19231,7 +19355,7 @@ input[type=range]:focus::-ms-fill-upper {
          * Setting properties inside this method will trigger the element to update
          * again after this update cycle completes.
          *
-         * * @param _changedProperties Map of changed properties with old values
+         * @param _changedProperties Map of changed properties with old values
          */
         updated(_changedProperties) {
         }
@@ -19242,7 +19366,7 @@ input[type=range]:focus::-ms-fill-upper {
          * Setting properties inside this method will trigger the element to update
          * again after this update cycle completes.
          *
-         * * @param _changedProperties Map of changed properties with old values
+         * @param _changedProperties Map of changed properties with old values
          */
         firstUpdated(_changedProperties) {
         }
@@ -19333,68 +19457,58 @@ input[type=range]:focus::-ms-fill-upper {
     // This line will be used in regexes to search for LitElement usage.
     // TODO(justinfagnani): inject version number at build time
     (window['litElementVersions'] || (window['litElementVersions'] = []))
-        .push('2.2.1');
+        .push('2.3.1');
     /**
-     * Minimal implementation of Array.prototype.flat
-     * @param arr the array to flatten
-     * @param result the accumlated result
+     * Sentinal value used to avoid calling lit-html's render function when
+     * subclasses do not implement `render`
      */
-    function arrayFlat$1(styles, result = []) {
-        for (let i = 0, length = styles.length; i < length; i++) {
-            const value = styles[i];
-            if (Array.isArray(value)) {
-                arrayFlat$1(value, result);
-            }
-            else {
-                result.push(value);
-            }
-        }
-        return result;
-    }
-    /** Deeply flattens styles array. Uses native flat if available. */
-    const flattenStyles$1 = (styles) => styles.flat ? styles.flat(Infinity) : arrayFlat$1(styles);
+    const renderNotImplemented$1 = {};
     class LitElement$1 extends UpdatingElement$1 {
-        /** @nocollapse */
-        static finalize() {
-            // The Closure JS Compiler does not always preserve the correct "this"
-            // when calling static super methods (b/137460243), so explicitly bind.
-            super.finalize.call(this);
-            // Prepare styling that is stamped at first render time. Styling
-            // is built from user provided `styles` or is inherited from the superclass.
-            this._styles =
-                this.hasOwnProperty(JSCompiler_renameProperty('styles', this)) ?
-                    this._getUniqueStyles() :
-                    this._styles || [];
+        /**
+         * Return the array of styles to apply to the element.
+         * Override this method to integrate into a style management system.
+         *
+         * @nocollapse
+         */
+        static getStyles() {
+            return this.styles;
         }
         /** @nocollapse */
         static _getUniqueStyles() {
-            // Take care not to call `this.styles` multiple times since this generates
-            // new CSSResults each time.
+            // Only gather styles once per class
+            if (this.hasOwnProperty(JSCompiler_renameProperty('_styles', this))) {
+                return;
+            }
+            // Take care not to call `this.getStyles()` multiple times since this
+            // generates new CSSResults each time.
             // TODO(sorvell): Since we do not cache CSSResults by input, any
             // shared styles will generate new stylesheet objects, which is wasteful.
             // This should be addressed when a browser ships constructable
             // stylesheets.
-            const userStyles = this.styles;
-            const styles = [];
-            if (Array.isArray(userStyles)) {
-                const flatStyles = flattenStyles$1(userStyles);
-                // As a performance optimization to avoid duplicated styling that can
-                // occur especially when composing via subclassing, de-duplicate styles
-                // preserving the last item in the list. The last item is kept to
-                // try to preserve cascade order with the assumption that it's most
-                // important that last added styles override previous styles.
-                const styleSet = flatStyles.reduceRight((set, s) => {
-                    set.add(s);
-                    // on IE set.add does not return the set.
-                    return set;
-                }, new Set());
-                // Array.from does not work on Set in IE
-                styleSet.forEach((v) => styles.unshift(v));
+            const userStyles = this.getStyles();
+            if (userStyles === undefined) {
+                this._styles = [];
             }
-            else if (userStyles) {
-                styles.push(userStyles);
+            else if (Array.isArray(userStyles)) {
+                // De-duplicate styles preserving the _last_ instance in the set.
+                // This is a performance optimization to avoid duplicated styles that can
+                // occur especially when composing via subclassing.
+                // The last item is kept to try to preserve the cascade order with the
+                // assumption that it's most important that last added styles override
+                // previous styles.
+                const addStyles = (styles, set) => styles.reduceRight((set, s) => 
+                // Note: On IE set.add() does not return the set
+                Array.isArray(s) ? addStyles(s, set) : (set.add(s), set), set);
+                // Array.from does not work on Set in IE, otherwise return
+                // Array.from(addStyles(userStyles, new Set<CSSResult>())).reverse()
+                const set = addStyles(userStyles, new Set());
+                const styles = [];
+                set.forEach((v) => styles.unshift(v));
+                this._styles = styles;
             }
-            return styles;
+            else {
+                this._styles = [userStyles];
+            }
         }
         /**
          * Performs element initialization. By default this calls `createRenderRoot`
@@ -19403,6 +19517,7 @@ input[type=range]:focus::-ms-fill-upper {
          */
         initialize() {
             super.initialize();
+            this.constructor._getUniqueStyles();
             this.renderRoot =
                 this.createRenderRoot();
             // Note, if renderRoot is not a shadowRoot, styles would/could apply to the
@@ -19466,12 +19581,16 @@ input[type=range]:focus::-ms-fill-upper {
          * Updates the element. This method reflects property values to attributes
          * and calls `render` to render DOM via lit-html. Setting properties inside
          * this method will *not* trigger another update.
-         * * @param _changedProperties Map of changed properties with old values
+         * @param _changedProperties Map of changed properties with old values
          */
         update(changedProperties) {
-            super.update(changedProperties);
+            // Setting properties in `render` should not trigger an update. Since
+            // updates are allowed after super.update, it's important to call `render`
+            // before that.
             const templateResult = this.render();
-            if (templateResult instanceof TemplateResult$1) {
+            super.update(changedProperties);
+            // If render is not implemented by the component, don't call lit-html render
+            if (templateResult !== renderNotImplemented$1) {
                 this.constructor
                     .render(templateResult, this.renderRoot, { scopeName: this.localName, eventContext: this });
             }
@@ -19488,11 +19607,13 @@ input[type=range]:focus::-ms-fill-upper {
             }
         }
         /**
-         * Invoked on each update to perform rendering tasks. This method must return
-         * a lit-html TemplateResult. Setting properties inside this method will *not*
-         * trigger the element to update.
+         * Invoked on each update to perform rendering tasks. This method may return
+         * any value renderable by lit-html's NodePart - typically a TemplateResult.
+         * Setting properties inside this method will *not* trigger the element to
+         * update.
          */
         render() {
+            return renderNotImplemented$1;
         }
     }
     /**
@@ -19504,548 +19625,1031 @@ input[type=range]:focus::-ms-fill-upper {
      */
     LitElement$1['finalized'] = true;
     /**
-     * Render method used to render the lit-html TemplateResult to the element's
-     * DOM.
-     * @param {TemplateResult} Template to render.
-     * @param {Element|DocumentFragment} Node into which to render.
-     * @param {String} Element name.
+     * Render method used to render the value to the element's DOM.
+     * @param result The value to render.
+     * @param container Node into which to render.
+     * @param options Element name.
      * @nocollapse
      */
     LitElement$1.render = render$1$1;
 
-    const WEBMERCATOR_EXTENT = 20037508.3427892;
-    const THREE = window.THREE;
+    const MERCATOR_A = 6378137.0;
+    const WORLD_SIZE = MERCATOR_A * Math.PI * 2;
 
+    const ThreeboxConstants = {
+      WORLD_SIZE: WORLD_SIZE,
+      PROJECTION_WORLD_SIZE: WORLD_SIZE / (MERCATOR_A * Math.PI * 2),
+      MERCATOR_A: MERCATOR_A,
+      DEG2RAD: Math.PI / 180,
+      RAD2DEG: 180 / Math.PI,
+      EARTH_CIRCUMFERENCE: 40075000, // In meters
+    };
+      
+    /* 
+      mapbox-gl uses a camera fixed at the orgin (the middle of the canvas) The camera is only updated when rotated (bearing angle), 
+      pitched or when the map view is resized.
+      When panning and zooming the map, the desired part of the world is translated and zoomed in front of the camera. The world is only updated when
+      the map is panned or zoomed.
 
-    class TileSet {
-    	constructor(){
-    		this.url = null;
-    		this.version = null;
-    		this.gltfUpAxis = 'Z';
-    		this.geometricError = null;
-    		this.root = null;
-    	}
-    	load(url, styleParams) {
-    		this.url = url;
-    		let resourcePath = THREE.LoaderUtils.extractUrlBase(url);
-    		let self = this;
-    		return new Promise((resolve, reject) => {
-    			fetch(self.url)
-    				.then(response => {
-    					if (!response.ok) {
-    						throw new Error(`HTTP ${response.status} - ${response.statusText}`);
-    					}
-    					return response;
-    				})
-    				.then(response => response.json())
-    				.then(json => {
-    					self.version = json.asset.version;
-    					self.geometricError = json.geometricError;
-    					self.refine = json.refine ? json.refine.toUpperCase() : 'ADD';
-    					self.root = new ThreeDeeTile(json.root, resourcePath, styleParams, self.refine, true);
-    				})
-    				.then(res => resolve())
-    				.catch(error => {
-    					console.error(error);
-    					reject(error);
-    				});
-    		});		
-    	}
+      The mapbox-gl internal coordinate system has origin (0,0) located at longitude -180 degrees and latitude 0 degrees. 
+      The scaling is 2^map.getZoom() * 512/EARTH_CIRCUMFERENCE_IN_METERS. At zoom=0 (scale=2^0=1), the whole world fits in 512 units.
+    */
+    class CameraSync {
+      constructor (map, camera, world) {
+        this.map = map;
+        this.camera = camera;
+        this.active = true;
+        this.updateCallback = ()=>{};
+        
+        this.camera.matrixAutoUpdate = false;   // We're in charge of the camera now!
+      
+        // Postion and configure the world group so we can scale it appropriately when the camera zooms
+        this.world = world || new THREE.Group();
+        this.world.position.x = this.world.position.y = ThreeboxConstants.WORLD_SIZE/2;
+        this.world.matrixAutoUpdate = false;
+      
+        //set up basic camera state
+        this.state = {
+          fov: 0.6435011087932844, // Math.atan(0.75);
+          translateCenter: new THREE.Matrix4(),
+          worldSizeRatio: 512/ThreeboxConstants.WORLD_SIZE
+        };
+      
+        this.state.translateCenter.makeTranslation(ThreeboxConstants.WORLD_SIZE/2, -ThreeboxConstants.WORLD_SIZE / 2, 0);
+      
+        // Listen for move events from the map and update the Three.js camera. Some attributes only change when viewport resizes, so update those accordingly
+        this.map.on('move', ()=>this.updateCamera());
+        this.map.on('resize', ()=>this.setupCamera());
+        //this.map.on('moveend', ()=>this.updateCallback())
+
+        this.setupCamera();
+      }
+      setupCamera() {
+        var t = this.map.transform;
+        const halfFov = this.state.fov / 2;
+        var cameraToCenterDistance = 0.5 / Math.tan(halfFov) * t.height;
+        
+        this.state.cameraToCenterDistance = cameraToCenterDistance;
+        this.state.cameraTranslateZ = new THREE.Matrix4().makeTranslation(0,0,cameraToCenterDistance);
+      
+        this.updateCamera();
+      }  
+      updateCamera(ev) {
+      
+        if(!this.camera) {
+          console.log('nocamera');
+          return;
+        }
+      
+        var t = this.map.transform;
+      
+        var halfFov = this.state.fov / 2;
+        const groundAngle = Math.PI / 2 + t._pitch;
+        this.state.topHalfSurfaceDistance = Math.sin(halfFov) * this.state.cameraToCenterDistance / Math.sin(Math.PI - groundAngle - halfFov);
+      
+        // Calculate z distance of the farthest fragment that should be rendered.
+        const furthestDistance = Math.cos(Math.PI / 2 - t._pitch) * this.state.topHalfSurfaceDistance + this.state.cameraToCenterDistance;
+        
+        // Add a bit extra to avoid precision problems when a fragment's distance is exactly `furthestDistance`
+        const farZ = furthestDistance * 1.01;    
+      
+        this.camera.projectionMatrix = this.makePerspectiveMatrix(this.state.fov, t.width / t.height, 1, farZ);
+        
+      
+        var cameraWorldMatrix = new THREE.Matrix4();
+        var rotatePitch = new THREE.Matrix4().makeRotationX(t._pitch);
+        var rotateBearing = new THREE.Matrix4().makeRotationZ(t.angle);
+      
+        // Unlike the Mapbox GL JS camera, separate camera translation and rotation out into its world matrix
+        // If this is applied directly to the projection matrix, it will work OK but break raycasting
+      
+        cameraWorldMatrix
+          .premultiply(this.state.cameraTranslateZ)
+          .premultiply(rotatePitch)
+          .premultiply(rotateBearing);
+        
+      
+        this.camera.matrixWorld.copy(cameraWorldMatrix);
+        
+        // Handle scaling and translation of objects in the map in the world's matrix transform, not the camera
+        let zoomPow = t.scale * this.state.worldSizeRatio;
+        let scale = new THREE.Matrix4();
+        scale.makeScale( zoomPow, zoomPow, zoomPow );
+        //console.log(`zoomPow: ${zoomPow}`);
+      
+        let translateMap = new THREE.Matrix4();
+        
+        let x = -this.map.transform.x || -this.map.transform.point.x;
+        let y = this.map.transform.y || this.map.transform.point.y;
+        
+        translateMap.makeTranslation(x, y, 0);
+        
+        this.world.matrix = new THREE.Matrix4;
+        this.world.matrix
+          //.premultiply(rotateMap)
+          .premultiply(this.state.translateCenter)
+          .premultiply(scale)
+          .premultiply(translateMap);
+        let matrixWorldInverse = new THREE.Matrix4();
+        matrixWorldInverse.getInverse(this.world.matrix);
+
+        this.camera.projectionMatrixInverse.getInverse(this.camera.projectionMatrix);
+        this.camera.matrixWorldInverse.getInverse(this.camera.matrixWorld);
+        this.frustum = new THREE.Frustum();
+        this.frustum.setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
+        
+        this.cameraPosition = new THREE.Vector3(0,0,0).unproject(this.camera).applyMatrix4(matrixWorldInverse);
+
+        this.updateCallback();
+      }
+      makePerspectiveMatrix(fovy, aspect, near, far) {
+      
+        let out = new THREE.Matrix4();
+        let f = 1.0 / Math.tan(fovy / 2),
+        nf = 1 / (near - far);
+      
+        let newMatrix = [
+          f / aspect, 0, 0, 0,
+          0, f, 0, 0,
+          0, 0, (far + near) * nf, -1,
+          0, 0, (2 * far * near) * nf, 0
+        ];
+      
+        out.elements = newMatrix;
+        return out;
+      }
     }
 
+    class TileSet {
+      constructor(updateCallback){
+        if (!updateCallback) {
+          updateCallback = ()=>{};
+        }
+        this.updateCallback = updateCallback;
+        this.url = null;
+        this.version = null;
+        this.gltfUpAxis = 'Z';
+        this.geometricError = null;
+        this.root = null;
+      }
+      // TileSet.load
+      async load(url, styleParams) {
+        this.url = url;
+        let resourcePath = THREE.LoaderUtils.extractUrlBase(url);
+        
+        let response = await fetch(this.url);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} - ${response.statusText}`);
+        }
+        let json = await response.json();    
+        this.version = json.asset.version;
+        this.geometricError = json.geometricError;
+        this.refine = json.root.refine ? json.root.refine.toUpperCase() : 'ADD';
+        this.root = new ThreeDeeTile(json.root, resourcePath, styleParams, this.updateCallback, this.refine);
+        return;
+      }
+    }
 
     class ThreeDeeTile {
-    	constructor(json, resourcePath, styleParams, parentRefine, isRoot) {
-    		this.loaded = false;
-    		this.styleParams = styleParams;
-    		this.resourcePath = resourcePath;
-    		this.totalContent = new THREE.Group();	// Three JS Object3D Group for this tile and all its children
-    		this.tileContent = new THREE.Group();		// Three JS Object3D Group for this tile's content
-    		this.childContent = new THREE.Group();		// Three JS Object3D Group for this tile's children
-    		this.totalContent.add(this.tileContent);
-    		this.totalContent.add(this.childContent);
-    		this.boundingVolume = json.boundingVolume;
-    		if (this.boundingVolume && this.boundingVolume.box) {
-    			let b = this.boundingVolume.box;
-    			let extent = [b[0] - b[3], b[1] - b[7], b[0] + b[3], b[1] + b[7]];
-    			let sw = new THREE.Vector3(extent[0], extent[1], b[2] - b[11]);
-    			let ne = new THREE.Vector3(extent[2], extent[3], b[2] + b[11]);
-    			this.box = new THREE.Box3(sw, ne);
-    		} else {
-    			this.extent = null;
-    			this.sw = null;
-    			this.ne = null;
-    			this.box = null;
-    			this.center = null;
-    		}
-    		this.refine = json.refine ? json.refine.toUpperCase() : parentRefine;
-    		this.geometricError = json.geometricError;
-    		this.transform = json.transform;
-    		if (this.transform && !isRoot) { 
-    			// if not the root tile: apply the transform to the THREE js Group
-    			// the root tile transform is applied to the camera while rendering
-    			this.totalContent.applyMatrix4(new THREE.Matrix4().fromArray(this.transform));
-    		}
-    		this.content = json.content;
-    		this.children = [];
-    		if (json.children) {
-    			for (let i=0; i<json.children.length; i++){
-    				let child = new ThreeDeeTile(json.children[i], resourcePath, styleParams, this.refine, false);
-    				this.childContent.add(child.totalContent);
-    				this.children.push(child);
-    			}
-    		}
-    	}
-    	load() {
-    		this.tileContent.visible = true;
-    		this.childContent.visible = true;
-    		if (this.loaded) {
-    			return;
-    		}
-    		this.loaded = true;
-    		let self = this;
-    		if (this.content) {
-    			let url = this.content.uri ? this.content.uri : this.content.url;
-    			if (!url) return;
-    			if (url.substr(0, 4) != 'http')
-    				url = this.resourcePath + url;
-    			let type = url.slice(-4);
-    			if (type == 'json') {
-    				// child is a tileset json
-    				let tileset = new TileSet();
-    				tileset.load(url, this.styleParams).then(function(){
-    					self.children.push(tileset.root);
-    					if (tileset.root) {
-    						if (tileset.root.transform) {
-    							// the root tile transform of a tileset is normally not applied because
-    							// it is applied by the camera while rendering. However, in case the tileset 
-    							// is a subset of another tileset, so the root tile transform must be applied 
-    							// to the THREE js group of the root tile.
-    							tileset.root.totalContent.applyMatrix4(new THREE.Matrix4().fromArray(tileset.root.transform));
-    						}
-    						self.childContent.add(tileset.root.totalContent);
-    					}
-    				});
-    			} else if (type == 'b3dm') {
-    				let loader = new THREE.GLTFLoader();
-    				let b3dm = new B3DM(url);
-    				let rotateX = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1, 0, 0), Math.PI / 2);
-    				self.tileContent.applyMatrix4(rotateX); // convert from GLTF Y-up to Z-up
-    				b3dm.load()
-    					.then(d => loader.parse(d.glbData, self.resourcePath, function(gltf) {
-    							if (self.styleParams.color != null || self.styleParams.opacity != null) {
-    								let color = new THREE.Color(self.styleParams.color);
-    								gltf.scene.traverse(child => {
-    									if (child instanceof THREE.Mesh) {
-    										if (self.styleParams.color != null) 
-    											child.material.color = color;
-    										if (self.styleParams.opacity != null) {
-    											child.material.opacity = self.styleParams.opacity;
-    											child.material.transparent = self.styleParams.opacity < 1.0 ? true : false;
-    										}
-    									}
-    								});
-    							}
-    							/*let children = gltf.scene.children;
-    							for (let i=0; i<children.length; i++) {
-    								if (children[i].isObject3D) 
-    									self.tileContent.add(children[i]);
-    							}*/
-    							self.tileContent.add(gltf.scene);
-    						}, function(e) {
-    							throw new Error('error parsing gltf: ' + e);
-    						})
-    					);
-    			} else if (type == 'pnts') {
-    				let pnts = new PNTS(url);
-    				pnts.load()
-    					.then(d => {
-    						let geometry = new THREE.BufferGeometry();
-    						geometry.setAttribute('position', new THREE.Float32BufferAttribute(d.points, 3));
-    						let material = new THREE.PointsMaterial();
-    						material.size = self.styleParams.pointsize != null ? self.styleParams.pointsize : 1.0;
-    						if (self.styleParams.color) {
-    							material.vertexColors = THREE.NoColors;
-    							material.color = new THREE.Color(self.styleParams.color);
-    							material.opacity = self.styleParams.opacity != null ? self.styleParams.opacity : 1.0;
-    						} else if (d.rgba) {
-    							geometry.setAttribute('color', new THREE.Float32BufferAttribute(d.rgba, 4));
-    							material.vertexColors = THREE.VertexColors;
-    						} else if (d.rgb) {
-    							geometry.setAttribute('color', new THREE.Float32BufferAttribute(d.rgb, 3));
-    							material.vertexColors = THREE.VertexColors;
-    						}
-    						self.tileContent.add(new THREE.Points( geometry, material ));
-    						if (d.rtc_center) {
-    							let c = d.rtc_center;
-    							self.tileContent.applyMatrix4(new THREE.Matrix4().makeTranslation(c[0], c[1], c[2]));
-    						}
-    						self.tileContent.add(new THREE.Points( geometry, material ));
-    					});
-    			} else if (type == 'i3dm') {
-    				throw new Error('i3dm tiles not yet implemented');					
-    			} else if (type == 'cmpt') {
-    				throw new Error('cmpt tiles not yet implemented');
-    			} else {
-    				throw new Error('invalid tile type: ' + type);
-    			}
-    		}
-    	}
-    	unload(includeChildren) {
-    		this.tileContent.visible = false;
-    		if (includeChildren) {
-    			this.childContent.visible = false;
-    		} else  {
-    			this.childContent.visible = true;
-    		}
-    		// TODO: should we also free up memory?
-    	}
-    	checkLoad(frustum, cameraPosition) {
-    		// is this tile visible?
-    		if (!frustum.intersectsBox(this.box)) {
-    			this.unload(true);
-    			return;
-    		}
-    		
-    		let dist = this.box.distanceToPoint(cameraPosition);
+      constructor(json, resourcePath, styleParams, updateCallback, parentRefine, parentTransform) {
+        this.loaded = false;
+        this.styleParams = styleParams;
+        this.updateCallback = updateCallback;
+        this.resourcePath = resourcePath;
+        this.totalContent = new THREE.Group();  // Three JS Object3D Group for this tile and all its children
+        this.tileContent = new THREE.Group();    // Three JS Object3D Group for this tile's content
+        this.childContent = new THREE.Group();    // Three JS Object3D Group for this tile's children
+        this.totalContent.add(this.tileContent);
+        this.totalContent.add(this.childContent);
+        this.boundingVolume = json.boundingVolume;
+        if (this.boundingVolume && this.boundingVolume.box) {
+          let b = this.boundingVolume.box;
+          let extent = [b[0] - b[3], b[1] - b[7], b[0] + b[3], b[1] + b[7]];
+          let sw = new THREE.Vector3(extent[0], extent[1], b[2] - b[11]);
+          let ne = new THREE.Vector3(extent[2], extent[3], b[2] + b[11]);
+          this.box = new THREE.Box3(sw, ne);
+          if (Mapbox3DTiles.DEBUG) {
+            let geom = new THREE.BoxGeometry(b[3] * 2, b[7] * 2, b[11] * 2);
+            let edges = new THREE.EdgesGeometry( geom );
+            this.debugColor = new THREE.Color( 0xffffff );
+            this.debugColor.setHex( Math.random() * 0xffffff );
+            let line = new THREE.LineSegments( edges, new THREE.LineBasicMaterial( {color:this.debugColor }) );
+            let trans = new THREE.Matrix4().makeTranslation(b[0], b[1], b[2]);
+            line.applyMatrix4(trans);
+            this.debugLine = line;
+          }
+        } else {
+          this.extent = null;
+          this.sw = null;
+          this.ne = null;
+          this.box = null;
+          this.center = null;
+        }
+        this.refine = json.refine ? json.refine.toUpperCase() : parentRefine;
+        this.geometricError = json.geometricError;
+        this.worldTransform = parentTransform ? parentTransform.clone() : new THREE.Matrix4();
+        this.transform = json.transform;
+        if (this.transform) 
+        { 
+          let tileMatrix = new THREE.Matrix4().fromArray(this.transform);
+          this.totalContent.applyMatrix4(tileMatrix);
+          this.worldTransform.multiply(tileMatrix);
+        }
+        this.content = json.content;
+        this.children = [];
+        if (json.children) {
+          for (let i=0; i<json.children.length; i++){
+            let child = new ThreeDeeTile(json.children[i], resourcePath, styleParams, updateCallback, this.refine, this.worldTransform);
+            this.childContent.add(child.totalContent);
+            this.children.push(child);
+          }
+        }
+      }
+      //ThreeDeeTile.load
+      async load() {
+        if (this.unloadedTileContent) {
+          this.totalContent.add(this.tileContent);
+          this.unloadedTileContent = false;
+        }
+        if (this.unloadedChildContent) {
+          this.totalContent.add(this.childContent);
+          this.unloadedChildContent = false;
+        }
+        if (this.unloadedDebugContent) {
+          this.totalContent.add(this.debugLine);
+          this.unloadedDebugContent = false;
+        }
+        if (this.loaded) {
+          this.updateCallback();
+          return;
+        }
+        this.loaded = true;
+        if (this.debugLine) {        
+          this.totalContent.add(this.debugLine);
+        }
+        if (this.content) {
+          let url = this.content.uri ? this.content.uri : this.content.url;
+          if (!url) return;
+          if (url.substr(0, 4) != 'http')
+            url = this.resourcePath + url;
+          let type = url.slice(-4);
+          switch (type) {
+            case 'json':
+              // child is a tileset json
+              try {
+                let tileset = new TileSet(()=>this.updateCallback());
+                await tileset.load(url, this.styleParams);
+                this.children.push(tileset.root);
+                if (tileset.root) {
+                  if (tileset.root.transform) {
+                    tileset.root.totalContent.applyMatrix4(new THREE.Matrix4().fromArray(tileset.root.transform));
+                  }
+                  this.childContent.add(tileset.root.totalContent);
+                }
+              } catch (error) {
+                // load failed (wrong url? connection issues?)
+                // log error, do not break program flow
+                console.error(error);
+              }
+              break;
+            case 'b3dm':
+              try {
+                let loader = new THREE.GLTFLoader();
+                let b3dm = new B3DM(url);
+                let rotateX = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+                this.tileContent.applyMatrix4(rotateX); // convert from GLTF Y-up to Z-up
+                let b3dmData = await b3dm.load();
+                loader.parse(b3dmData.glbData, this.resourcePath, (gltf) => {
+                    //Add the batchtable to the userData since gltLoader doesn't deal with it
+                    gltf.scene.children[0].userData = b3dmData.batchTableJson;
+                    
+                    gltf.scene.traverse(child => {
+                      if (child instanceof THREE.Mesh) {
+                        // some gltf has wrong bounding data, recompute here
+                        child.geometry.computeBoundingBox();
+                        child.geometry.computeBoundingSphere();
+                        child.material.depthWrite = true; // necessary for Velsen dataset?
+                      }
+                    });
+                    if (this.styleParams.color != null || this.styleParams.opacity != null) {
+                      let color = new THREE.Color(this.styleParams.color);
+                      gltf.scene.traverse(child => {
+                        if (child instanceof THREE.Mesh) {
+                          if (this.styleParams.color != null) 
+                            child.material.color = color;
+                          if (this.styleParams.opacity != null) {
+                            child.material.opacity = this.styleParams.opacity;
+                            child.material.transparent = this.styleParams.opacity < 1.0 ? true : false;
+                          }
+                        }
+                      });
+                    }
+                    if (this.debugColor) {
+                      gltf.scene.traverse(child => {
+                        if (child instanceof THREE.Mesh) {
+                          child.material.color = this.debugColor;
+                        }
+                      });
+                    }
+                    this.tileContent.add(gltf.scene);
+                  }, (error) => {
+                    throw new Error('error parsing gltf: ' + error);
+                  }
+                );
+              } catch (error) {
+                console.error(error);
+              }
+              break;
+            case 'pnts':
+              try {
+                let pnts = new PNTS(url);
+                let pointData = await pnts.load();            
+                let geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(pointData.points, 3));
+                let material = new THREE.PointsMaterial();
+                material.size = this.styleParams.pointsize != null ? this.styleParams.pointsize : 1.0;
+                if (this.styleParams.color) {
+                  material.vertexColors = THREE.NoColors;
+                  material.color = new THREE.Color(this.styleParams.color);
+                  material.opacity = this.styleParams.opacity != null ? this.styleParams.opacity : 1.0;
+                } else if (pointData.rgba) {
+                  geometry.setAttribute('color', new THREE.Float32BufferAttribute(pointData.rgba, 4));
+                  material.vertexColors = THREE.VertexColors;
+                } else if (pointData.rgb) {
+                  geometry.setAttribute('color', new THREE.Float32BufferAttribute(pointData.rgb, 3));
+                  material.vertexColors = THREE.VertexColors;
+                }
+                this.tileContent.add(new THREE.Points( geometry, material ));
+                if (pointData.rtc_center) {
+                  let c = pointData.rtc_center;
+                  this.tileContent.applyMatrix4(new THREE.Matrix4().makeTranslation(c[0], c[1], c[2]));
+                }
+                this.tileContent.add(new THREE.Points( geometry, material ));
+              } catch (error) {
+                console.error(error);
+              }
+              break;
+            case 'i3dm':
+              throw new Error('i3dm tiles not yet implemented');
+            case 'cmpt':
+              throw new Error('cmpt tiles not yet implemented');
+            default:
+              throw new Error('invalid tile type: ' + type);
+          }
+        }
+        this.updateCallback();
+      }
+      unload(includeChildren) {
+        this.unloadedTileContent = true;
+        this.totalContent.remove(this.tileContent);
 
-    		//console.log(`dist: ${dist}, geometricError: ${this.geometricError}`);
-    		// are we too far to render this tile?
-    		if (this.geometricError > 0.0 && dist > this.geometricError * 50.0) {
-    			this.unload(true);
-    			return;
-    		}
-    		
-    		// should we load this tile?
-    		if (this.refine == 'REPLACE' && dist < this.geometricError * 20.0) {
-    			this.unload(false);
-    		} else {
-    			this.load();
-    		}
+        //this.tileContent.visible = false;
+        if (includeChildren) {
+          this.unloadedChildContent = true;
+          this.totalContent.remove(this.childContent);
+          //this.childContent.visible = false;
+        } else  {
+          if (this.unloadedChildContent) {
+            this.unloadedChildContent = false;
+            this.totalContent.add(this.childContent);
+          }
+        }
+        if (this.debugLine) {
+          this.totalContent.remove(this.debugLine);
+          this.unloadedDebugContent = true;
+        }
+        this.updateCallback();
+        // TODO: should we also free up memory?
+      }
+      checkLoad(frustum, cameraPosition) {
 
-    		// should we load its children?
-    		for (let i=0; i<this.children.length; i++) {
-    			if (dist < this.geometricError * 20.0) {
-    				this.children[i].checkLoad(frustum, cameraPosition);
-    			} else {
-    				this.children[i].unload(true);
-    			}
-    		}
-    		
-    		/*
-    		// below code loads tiles based on screenspace instead of geometricError,
-    		// not sure yet which algorith is better so i'm leaving this code here for now
-    		let sw = this.box.min.clone().project(camera);
-    		let ne = this.box.max.clone().project(camera);			
-    		let x1 = sw.x, x2 = ne.x;
-    		let y1 = sw.y, y2 = ne.y;
-    		let tilespace = Math.sqrt((x2 - x1)*(x2 - x1) + (y2 - y1)*(y2 - y1)); // distance in screen space
-    		
-    		if (tilespace < 0.2) {
-    			this.unload();
-    		}
-    		// do nothing between 0.2 and 0.25 to avoid excessive tile loading/unloading
-    		else if (tilespace > 0.25) {
-    			this.load();
-    			this.children.forEach(child => {
-    				child.checkLoad(camera);
-    			});
-    		}*/
-    		
-    	}
+        /*this.load();
+        for (let i=0; i<this.children.length;i++) {
+          this.children[i].checkLoad(frustum, cameraPosition);
+        }
+        return;
+        */
+
+        /*if (this.totalContent.parent.name === "world") {
+          this.totalContent.parent.updateMatrixWorld();
+        }*/
+        let transformedBox = this.box.clone();
+        transformedBox.applyMatrix4(this.totalContent.matrixWorld);
+        
+        // is this tile visible?
+        if (!frustum.intersectsBox(transformedBox)) {
+          this.unload(true);
+          return;
+        }
+        
+        let worldBox = this.box.clone().applyMatrix4(this.worldTransform);
+        let dist = worldBox.distanceToPoint(cameraPosition);
+        
+
+        //console.log(`dist: ${dist}, geometricError: ${this.geometricError}`);
+        // are we too far to render this tile?
+        if (this.geometricError > 0.0 && dist > this.geometricError * 50.0) {
+          this.unload(true);
+          return;
+        }
+        //console.log(`camPos: ${cameraPosition.z}, dist: ${dist}, geometricError: ${this.geometricError}`);
+        
+        // should we load this tile?
+        if (this.refine == 'REPLACE' && dist < this.geometricError * 20.0) {
+          this.unload(false);
+        } else {
+          this.load();
+        }
+        
+        
+        // should we load its children?
+        for (let i=0; i<this.children.length; i++) {
+          if (dist < this.geometricError * 20.0) {
+            this.children[i].checkLoad(frustum, cameraPosition);
+          } else {
+            this.children[i].unload(true);
+          }
+        }
+
+        /*
+        // below code loads tiles based on screenspace instead of geometricError,
+        // not sure yet which algorith is better so i'm leaving this code here for now
+        let sw = this.box.min.clone().project(camera);
+        let ne = this.box.max.clone().project(camera);      
+        let x1 = sw.x, x2 = ne.x;
+        let y1 = sw.y, y2 = ne.y;
+        let tilespace = Math.sqrt((x2 - x1)*(x2 - x1) + (y2 - y1)*(y2 - y1)); // distance in screen space
+        
+        if (tilespace < 0.2) {
+          this.unload();
+        }
+        // do nothing between 0.2 and 0.25 to avoid excessive tile loading/unloading
+        else if (tilespace > 0.25) {
+          this.load();
+          this.children.forEach(child => {
+            child.checkLoad(camera);
+          });
+        }*/
+        
+      }
     }
 
     class TileLoader {
-    	// This class contains the common code to load tile content, such as b3dm and pnts files.
-    	// It is not to be used directly. Instead, subclasses are used to implement specific 
-    	// content loaders for different tile types.
-    	constructor(url) {
-    		this.url = url;
-    		this.type = url.slice(-4);
-    		this.version = null;
-    		this.byteLength = null;
-    		this.featureTableJSON = null;
-    		this.featureTableBinary = null;
-    		this.batchTableJson = null;
-    		this.batchTableBinary = null;
-    		this.binaryData = null;
-    	}
-    	load() {
-    		let self = this;
-    		return new Promise((resolve, reject) => {
-    			fetch(self.url)
-    				.then(response => {
-    					if (!response.ok) {
-    						throw new Error(`HTTP ${response.status} - ${response.statusText}`);
-    					}
-    					return response;
-    				})
-    				.then(response => response.arrayBuffer())
-    				.then(buffer => self.parseResponse(buffer))
-    				.then(res => resolve(res))
-    				.catch(error => {
-    					reject(error);
-    				});
-    		});		
-    	}
-    	parseResponse(buffer) {
-    		let header = new Uint32Array(buffer.slice(0, 28));
-    		let decoder = new TextDecoder();
-    		let magic = decoder.decode(new Uint8Array(buffer.slice(0, 4)));
-    		if (magic != this.type) {
-    			throw new Error(`Invalid magic string, expected '${this.type}', got '${this.magic}'`);
-    		}
-    		this.version = header[1];
-    		this.byteLength = header[2];
-    		let featureTableJSONByteLength = header[3];
-    		let featureTableBinaryByteLength = header[4];
-    		let batchTableJsonByteLength = header[5];
-    		let batchTableBinaryByteLength = header[6];
-    		
-    		/*
-    		console.log('magic: ' + magic);
-    		console.log('version: ' + this.version);
-    		console.log('featureTableJSONByteLength: ' + featureTableJSONByteLength);
-    		console.log('featureTableBinaryByteLength: ' + featureTableBinaryByteLength);
-    		console.log('batchTableJsonByteLength: ' + batchTableJsonByteLength);
-    		console.log('batchTableBinaryByteLength: ' + batchTableBinaryByteLength);
-    		*/
-    		
-    		let pos = 28; // header length
-    		if (featureTableJSONByteLength > 0) {
-    			this.featureTableJSON = JSON.parse(decoder.decode(new Uint8Array(buffer.slice(pos, pos+featureTableJSONByteLength))));
-    			pos += featureTableJSONByteLength;
-    		} else {
-    			this.featureTableJSON = {};
-    		}
-    		this.featureTableBinary = buffer.slice(pos, pos+featureTableBinaryByteLength);
-    		pos += featureTableBinaryByteLength;
-    		if (batchTableJsonByteLength > 0) {
-    			this.batchTableJson = JSON.parse(decoder.decode(new Uint8Array(buffer.slice(pos, pos+batchTableJsonByteLength))));
-    			pos += batchTableJsonByteLength;
-    		} else {
-    			this.batchTableJson = {};
-    		}
-    		this.batchTableBinary = buffer.slice(pos, pos+batchTableBinaryByteLength);
-    		pos += batchTableBinaryByteLength;
-    		this.binaryData = buffer.slice(pos);
-    		return this;
-    	}
+      // This class contains the common code to load tile content, such as b3dm and pnts files.
+      // It is not to be used directly. Instead, subclasses are used to implement specific 
+      // content loaders for different tile types.
+      constructor(url) {
+        this.url = url;
+        this.type = url.slice(-4);
+        this.version = null;
+        this.byteLength = null;
+        this.featureTableJSON = null;
+        this.featureTableBinary = null;
+        this.batchTableJson = null;
+        this.batchTableBinary = null;
+        this.binaryData = null;
+      }
+      // TileLoader.load
+      async load() {
+        let response = await fetch(this.url);            
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} - ${response.statusText}`);
+        }
+        let buffer = await response.arrayBuffer();
+        let res = this.parseResponse(buffer);
+        return res;
+      }
+      parseResponse(buffer) {
+        let header = new Uint32Array(buffer.slice(0, 28));
+        let decoder = new TextDecoder();
+        let magic = decoder.decode(new Uint8Array(buffer.slice(0, 4)));
+        if (magic != this.type) {
+          throw new Error(`Invalid magic string, expected '${this.type}', got '${this.magic}'`);
+        }
+        this.version = header[1];
+        this.byteLength = header[2];
+        let featureTableJSONByteLength = header[3];
+        let featureTableBinaryByteLength = header[4];
+        let batchTableJsonByteLength = header[5];
+        let batchTableBinaryByteLength = header[6];
+        
+        /*
+        console.log('magic: ' + magic);
+        console.log('version: ' + this.version);
+        console.log('featureTableJSONByteLength: ' + featureTableJSONByteLength);
+        console.log('featureTableBinaryByteLength: ' + featureTableBinaryByteLength);
+        console.log('batchTableJsonByteLength: ' + batchTableJsonByteLength);
+        console.log('batchTableBinaryByteLength: ' + batchTableBinaryByteLength);
+        */
+        
+        let pos = 28; // header length
+        if (featureTableJSONByteLength > 0) {
+          this.featureTableJSON = JSON.parse(decoder.decode(new Uint8Array(buffer.slice(pos, pos+featureTableJSONByteLength))));
+          pos += featureTableJSONByteLength;
+        } else {
+          this.featureTableJSON = {};
+        }
+        this.featureTableBinary = buffer.slice(pos, pos+featureTableBinaryByteLength);
+        pos += featureTableBinaryByteLength;
+        if (batchTableJsonByteLength > 0) {
+          this.batchTableJson = JSON.parse(decoder.decode(new Uint8Array(buffer.slice(pos, pos+batchTableJsonByteLength))));
+          pos += batchTableJsonByteLength;
+        } else {
+          this.batchTableJson = {};
+        }
+        this.batchTableBinary = buffer.slice(pos, pos+batchTableBinaryByteLength);
+        pos += batchTableBinaryByteLength;
+        this.binaryData = buffer.slice(pos);
+        return this;
+      }
     }
-
+      
     class B3DM extends TileLoader {
-    	constructor(url) {
-    		super(url);
-    		this.glbData = null;
-    	}
-    	parseResponse(buffer) {
-    		super.parseResponse(buffer);
-    		this.glbData = this.binaryData;
-    		return this;
-    	}
+      constructor(url) {
+        super(url);
+        this.glbData = null;
+      }
+      parseResponse(buffer) {
+        super.parseResponse(buffer);
+        this.glbData = this.binaryData;
+        return this;
+      }
     }
 
     class PNTS extends TileLoader{
-    	constructor(url) {
-    		super(url);
-    		this.points = new Float32Array();
-    		this.rgba = null;
-    		this.rgb = null;
-    	}
-    	parseResponse(buffer) {
-    		super.parseResponse(buffer);
-    		if (this.featureTableJSON.POINTS_LENGTH && this.featureTableJSON.POSITION) {
-    			let len = this.featureTableJSON.POINTS_LENGTH;
-    			let pos = this.featureTableJSON.POSITION.byteOffset;
-    			this.points = new Float32Array(this.featureTableBinary.slice(pos, pos + len * Float32Array.BYTES_PER_ELEMENT * 3));
-    			this.rtc_center = this.featureTableJSON.RTC_CENTER;
-    			if (this.featureTableJSON.RGBA) {
-    				pos = this.featureTableJSON.RGBA.byteOffset;
-    				let colorInts = new Uint8Array(this.featureTableBinary.slice(pos, pos + len * Uint8Array.BYTES_PER_ELEMENT * 4));
-    				let rgba = new Float32Array(colorInts.length);
-    				for (let i=0; i<colorInts.length; i++) {
-    					rgba[i] = colorInts[i] / 255.0;
-    				}
-    				this.rgba = rgba;
-    			} else if (this.featureTableJSON.RGB) {
-    				pos = this.featureTableJSON.RGB.byteOffset;
-    				let colorInts = new Uint8Array(this.featureTableBinary.slice(pos, pos + len * Uint8Array.BYTES_PER_ELEMENT * 3));
-    				let rgb = new Float32Array(colorInts.length);
-    				for (let i=0; i<colorInts.length; i++) {
-    					rgb[i] = colorInts[i] / 255.0;
-    				}
-    				this.rgb = rgb;
-    			} else if (this.featureTableJSON.RGB565) {
-    				console.error('RGB565 is currently not supported in pointcloud tiles.');
-    			}
-    		}
-    		return this;
-    	}
+      constructor(url) {
+        super(url);
+        this.points = new Float32Array();
+        this.rgba = null;
+        this.rgb = null;
+      }
+      parseResponse(buffer) {
+        super.parseResponse(buffer);
+        if (this.featureTableJSON.POINTS_LENGTH && this.featureTableJSON.POSITION) {
+          let len = this.featureTableJSON.POINTS_LENGTH;
+          let pos = this.featureTableJSON.POSITION.byteOffset;
+          this.points = new Float32Array(this.featureTableBinary.slice(pos, pos + len * Float32Array.BYTES_PER_ELEMENT * 3));
+          this.rtc_center = this.featureTableJSON.RTC_CENTER;
+          if (this.featureTableJSON.RGBA) {
+            pos = this.featureTableJSON.RGBA.byteOffset;
+            let colorInts = new Uint8Array(this.featureTableBinary.slice(pos, pos + len * Uint8Array.BYTES_PER_ELEMENT * 4));
+            let rgba = new Float32Array(colorInts.length);
+            for (let i=0; i<colorInts.length; i++) {
+              rgba[i] = colorInts[i] / 255.0;
+            }
+            this.rgba = rgba;
+          } else if (this.featureTableJSON.RGB) {
+            pos = this.featureTableJSON.RGB.byteOffset;
+            let colorInts = new Uint8Array(this.featureTableBinary.slice(pos, pos + len * Uint8Array.BYTES_PER_ELEMENT * 3));
+            let rgb = new Float32Array(colorInts.length);
+            for (let i=0; i<colorInts.length; i++) {
+              rgb[i] = colorInts[i] / 255.0;
+            }
+            this.rgb = rgb;
+          } else if (this.featureTableJSON.RGB565) {
+            console.error('RGB565 is currently not supported in pointcloud tiles.');
+          }
+        }
+        return this;
+      }
+    }
+      
+    class Layer {
+      constructor (params) {
+        if (!params) throw new Error('parameters missing for mapbox 3D tiles layer');
+        if (!params.id) throw new Error('id parameter missing for mapbox 3D tiles layer');
+        if (!params.url) throw new Error('url parameter missing for mapbox 3D tiles layer');
+        
+        this.id = params.id,
+        this.url = params.url;
+        this.styleParams = {};
+        if ('color' in params) this.styleParams.color = params.color;
+        if ('opacity' in params) this.styleParams.opacity = params.opacity;
+        if ('pointsize' in params) this.styleParams.pointsize = params.pointsize;
+
+        this.loadStatus = 0;
+        this.viewProjectionMatrix = null;
+        
+        this.type = 'custom';
+        this.renderingMode = '3d';
+      }
+      LightsArray() {
+        const arr = [];
+        let directionalLight1 = new THREE.DirectionalLight(0xffffff);
+        directionalLight1.position.set(0.5, 1, 0.5).normalize();
+        let target = directionalLight1.target.position.set(100000000, 1000000000, 0).normalize();
+        arr.push(directionalLight1);
+
+        let directionalLight2 = new THREE.DirectionalLight(0xffffff);
+        //directionalLight2.position.set(0, 70, 100).normalize();
+        directionalLight2.position.set(0.3, 0.3, 1).normalize();
+        arr.push(directionalLight2);
+
+        //arr.push(new THREE.DirectionalLightHelper( directionalLight1, 500));
+        //arr.push(new THREE.DirectionalLightHelper( directionalLight2, 500));     
+
+              //this.scene.background = new THREE.Color( 0xaaaaaa );
+              //this.scene.add( new THREE.DirectionalLight() );
+              //this.scene.add( new THREE.HemisphereLight() );
+        return arr;
+      }
+      loadVisibleTiles() {
+        if (this.tileset.root) {
+          //console.log(`map width: ${this.map.transform.width}, height: ${this.map.transform.height}`);
+          //console.log(`Basegeometric error: ${40000000/(512*Math.pow(2,this.map.getZoom()))}`)
+          this.tileset.root.checkLoad(this.cameraSync.frustum, this.cameraSync.cameraPosition);
+        }
+      }
+      onAdd(map, gl) {
+        this.map = map;
+        const fov = 36.8;
+        const aspect = map.getCanvas().width/map.getCanvas().height;
+        const near = 0.000000000001;
+        const far = Infinity;
+        // create perspective camera, parameters reinitialized by CameraSync
+        this.camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
+
+        this.mapQueryRenderedFeatures = map.queryRenderedFeatures.bind(this.map);
+        this.map.queryRenderedFeatures = this.queryRenderedFeatures.bind(this);
+              
+        this.scene = new THREE.Scene();
+        this.rootTransform = [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
+        let lightsarray = this.LightsArray();
+        lightsarray.forEach(light=>{
+          this.scene.add(light);
+        });
+        this.world = new THREE.Group();
+        this.world.name = 'flatMercatorWorld';
+        this.scene.add(this.world);
+
+        this.renderer = new THREE.WebGLRenderer({
+          alpha: true, 
+          antialias: true, 
+          canvas: map.getCanvas(),
+          context: gl
+        });
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.autoClear = false;
+
+        this.cameraSync = new CameraSync(this.map, this.camera, this.world);
+        this.cameraSync.updateCallback = ()=>this.loadVisibleTiles();
+        
+        //raycaster for mouse events
+        this.raycaster = new THREE.Raycaster();
+        this.tileset = new TileSet(()=>this.map.triggerRepaint());
+        this.tileset.load(this.url, this.styleParams).then(()=>{
+          if (this.tileset.root) {
+            this.world.add(this.tileset.root.totalContent);
+            this.world.updateMatrixWorld();
+            this.loadStatus = 1;
+            this.loadVisibleTiles();
+          }
+        }).catch(error=>{
+          console.error(`${error} (${this.url})`);
+        });
+      }
+      onRemove(map, gl) {
+        // todo: (much) more cleanup?
+        this.map.queryRenderedFeatures = this.mapQueryRenderedFeatures;
+        this.cameraSync = null;
+      }
+      queryRenderedFeatures(geometry, options){
+        let result = this.mapQueryRenderedFeatures(geometry, options);
+        if (!this.map || !this.map.transform) {
+          return result;
+        }
+        if (!(options && options.layers && !options.layers.includes(this.id))) {
+          if (geometry && geometry.x && geometry.y) {     
+            var mouse = new THREE.Vector2();
+            
+            // // scale mouse pixel position to a percentage of the screen's width and height
+            mouse.x = ( geometry.x / this.map.transform.width ) * 2 - 1;
+            mouse.y = 1 - ( geometry.y / this.map.transform.height ) * 2;
+
+            this.raycaster.setFromCamera(mouse, this.camera);
+
+            // calculate objects intersecting the picking ray
+            let intersects = this.raycaster.intersectObjects(this.world.children, true);
+            if (intersects.length) {
+              let feature = {
+                "type": "Feature",
+                "properties" : {},
+                "geometry" :{},
+                "layer": {"id": this.id, "type": "custom 3d"},
+                "source": this.url,
+                "source-layer": null,
+                "state": {}
+              };
+              let propertyIndex;
+              let intersect = intersects[0];
+              if (intersect.object && intersect.object.geometry && 
+                  intersect.object.geometry.attributes && 
+                  intersect.object.geometry.attributes._batchid) {
+                let geometry = intersect.object.geometry;
+                let vertexIdx = intersect.faceIndex;
+                if (geometry.index) {
+                  // indexed BufferGeometry
+                  vertexIdx = geometry.index.array[intersect.faceIndex*3];
+                  propertyIndex = geometry.attributes._batchid.data.array[vertexIdx*7+6];
+                } else {
+                  // un-indexed BufferGeometry
+                  propertyIndex = geometry.attributes._batchid.array[vertexIdx*3];
+                }            
+                let keys = Object.keys(intersect.object.parent.userData);
+                if (keys.length) {
+                  for (let propertyName of keys) {
+                    feature.properties[propertyName] = intersect.object.parent.userData[propertyName][propertyIndex];
+                  }
+                } else {
+                  feature.properties.batchId = propertyIndex;
+                }
+              } else {
+                if (intersect.index != null) {
+                  feature.properties.index = intersect.index;
+                } else {
+                  feature.properties.name = this.id;
+                }
+              }
+              if (options.outline != false && (intersect.object !== this.outlinedObject || 
+                  (propertyIndex != null && propertyIndex !== this.outlinePropertyIndex) 
+                    || (propertyIndex == null && intersect.index !== this.outlineIndex))) {
+                // update outline
+                if (this.outlineMesh) {
+                  let parent = this.outlineMesh.parent;
+                  parent.remove(this.outlineMesh);
+                  this.outlineMesh = null;
+                }
+                this.outlinePropertyIndex = propertyIndex;
+                this.outlineIndex = intersect.index;
+                if (intersect.object instanceof THREE.Mesh) {
+                  this.outlinedObject = intersect.object;
+                  let outlineMaterial = new THREE.MeshBasicMaterial({color: options.outlineColor? options.outlineColor : 0xff0000, wireframe: true});
+                  let outlineMesh;
+                  if (intersect.object && 
+                      intersect.object.geometry && 
+                      intersect.object.geometry.attributes && 
+                      intersect.object.geometry.attributes._batchid) {
+                    // create new geometry from faces that have same _batchid
+                    let geometry = intersect.object.geometry;
+                    if (geometry.index) {
+                      let ip1 = geometry.index.array[intersect.faceIndex*3];
+                      let idx = geometry.attributes._batchid.data.array[ip1*7+6];
+                      let blockFaces = [];
+                      for (let faceIndex = 0; faceIndex < geometry.index.array.length; faceIndex += 3) {
+                        let p1 = geometry.index.array[faceIndex];
+                        if (geometry.attributes._batchid.data.array[p1*7+6] === idx) {
+                          let p2 = geometry.index.array[faceIndex+1];
+                          if (geometry.attributes._batchid.data.array[p2*7+6] === idx) {
+                            let p3 = geometry.index.array[faceIndex+2];
+                            if (geometry.attributes._batchid.data.array[p3*7+6] === idx) {
+                              blockFaces.push(faceIndex);
+                            }
+                          }
+                        }
+                      }  
+                      let highLightGeometry = new THREE.Geometry(); 
+                      for (let vertexCount = 0, face = 0; face < blockFaces.length; face++) {
+                        let faceIndex = blockFaces[face];
+                        let p1 = geometry.index.array[faceIndex];
+                        let p2 = geometry.index.array[faceIndex+1];
+                        let p3 = geometry.index.array[faceIndex+2];
+                        let positions = geometry.attributes.position.data.array;
+                        highLightGeometry.vertices.push(
+                          new THREE.Vector3(positions[p1*7], positions[p1*7+1], positions[p1*7+2]),
+                          new THREE.Vector3(positions[p2*7], positions[p2*7+1], positions[p2*7+2]),
+                          new THREE.Vector3(positions[p3*7], positions[p3*7+1], positions[p3*7+2]),
+                        );
+                        highLightGeometry.faces.push(new THREE.Face3(vertexCount, vertexCount+1, vertexCount+2));
+                        vertexCount += 3;
+                      }
+                      highLightGeometry.computeBoundingSphere();
+                      outlineMesh = new THREE.Mesh(highLightGeometry, outlineMaterial);
+                    } else {
+                      let ip1 = intersect.faceIndex*3;
+                      let idx = geometry.attributes._batchid.array[ip1];
+                      let blockFaces = [];
+                      for (let faceIndex = 0; faceIndex < geometry.attributes._batchid.array.length; faceIndex += 3) {
+                        let p1 = faceIndex;
+                        if (geometry.attributes._batchid.array[p1] === idx) {
+                          let p2 = faceIndex + 1;
+                          if (geometry.attributes._batchid.array[p2] === idx) {
+                            let p3 = faceIndex + 2;
+                            if (geometry.attributes._batchid.array[p3] === idx) {
+                              blockFaces.push(faceIndex);
+                            }
+                          }
+                        }
+                      }
+                      let highLightGeometry = new THREE.Geometry(); 
+                      for (let vertexCount = 0, face = 0; face < blockFaces.length; face++) {
+                        let faceIndex = blockFaces[face] * 3;
+                        let positions = geometry.attributes.position.array;
+                        highLightGeometry.vertices.push(
+                          new THREE.Vector3(positions[faceIndex], positions[faceIndex+1], positions[faceIndex+2]),
+                          new THREE.Vector3(positions[faceIndex+3], positions[faceIndex+4], positions[faceIndex+5]),
+                          new THREE.Vector3(positions[faceIndex+6], positions[faceIndex+7], positions[faceIndex+8]),
+                        );
+                        highLightGeometry.faces.push(new THREE.Face3(vertexCount, vertexCount+1, vertexCount+2));
+                        vertexCount += 3;
+                      }
+                      highLightGeometry.computeBoundingSphere();   
+                      outlineMesh = new THREE.Mesh(highLightGeometry, outlineMaterial);
+                    }
+                  } else {
+                    outlineMesh = new THREE.Mesh(this.outlinedObject.geometry, outlineMaterial);
+                  }
+                  outlineMesh.position.x = this.outlinedObject.position.x+0.1;
+                  outlineMesh.position.y = this.outlinedObject.position.y+0.1;
+                  outlineMesh.position.z = this.outlinedObject.position.z+0.1;
+                  outlineMesh.quaternion.copy(this.outlinedObject.quaternion);
+                  outlineMesh.scale.copy(this.outlinedObject.scale);
+                  outlineMesh.matrix.copy(this.outlinedObject.matrix);
+                  outlineMesh.raycast = () =>{};
+                  outlineMesh.name = "outline";
+                  outlineMesh.wireframe = true;
+                  this.outlinedObject.parent.add(outlineMesh);
+                  this.outlineMesh = outlineMesh;
+                }
+              }
+              result.unshift(feature);
+              this.map.triggerRepaint();
+            } else {
+              this.outlinedObject = null;
+              if (this.outlineMesh) {
+                let parent = this.outlineMesh.parent;
+                parent.remove(this.outlineMesh);
+                this.outlineMesh = null;
+                this.map.triggerRepaint();
+              }
+            }
+          }
+        }
+        return result;
+      }
+      _update() {
+        this.renderer.state.reset();
+        this.renderer.render (this.scene, this.camera);
+        
+        
+        /*if (this.loadStatus == 1) { // first render after root tile is loaded
+          this.loadStatus = 2;
+          let frustum = new THREE.Frustum();
+          frustum.setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
+          if (this.tileset.root) {
+            this.tileset.root.checkLoad(frustum, this.getCameraPosition());
+          }
+        }*/
+      }
+      update() {
+        requestAnimationFrame(()=>this._update());
+      }
+      render(gl, viewProjectionMatrix) {
+        this._update();
+      }
     }
 
+    class Mapbox3DTiles {
+      
+      static projectedUnitsPerMeter(latitude) {
+        let c = ThreeboxConstants;
+        return Math.abs( c.WORLD_SIZE / Math.cos( c.DEG2RAD * latitude ) / c.EARTH_CIRCUMFERENCE );
+      }
+      static projectToWorld(coords) {
+        // Spherical mercator forward projection, re-scaling to WORLD_SIZE
+        let c = ThreeboxConstants;
+        var projected = [
+            c.MERCATOR_A * c.DEG2RAD * coords[0] * c.PROJECTION_WORLD_SIZE,
+            c.MERCATOR_A * Math.log(Math.tan((Math.PI*0.25) + (0.5 * c.DEG2RAD * coords[1]) )) * c.PROJECTION_WORLD_SIZE
+        ];
+     
+        //z dimension, defaulting to 0 if not provided
+        if (!coords[2]) {
+          projected.push(0);
+        } else {
+            var pixelsPerMeter = projectedUnitsPerMeter(coords[1]);
+            projected.push( coords[2] * pixelsPerMeter );
+        }
 
-    const transform2mapbox = function (matrix) {
-    	const min = -WEBMERCATOR_EXTENT;
-    	const max = WEBMERCATOR_EXTENT;
-    	const scale = 1 / (2 * WEBMERCATOR_EXTENT);
-    	
-    	let result = matrix.slice(); // copy array
-    	result[12] = (matrix[12] - min) * scale; // x translation
-    	result[13] = (matrix[13] - max) * -scale; // y translation
-    	result[14] = matrix[14] * scale; // z translation
-    	
-    	return new THREE.Matrix4().fromArray(result).scale(new THREE.Vector3(scale, -scale, scale));
-    };
+        var result = new THREE.Vector3(projected[0], projected[1], projected[2]);
 
-    class Mapbox3DTileLayer {
-    	constructor(params) {
-    		if (!params) throw new Error('parameters missing for mapbox 3D tiles layer');
-    		if (!params.id) throw new Error('id parameter missing for mapbox 3D tiles layer');
-    		if (!params.url) throw new Error('url parameter missing for mapbox 3D tiles layer');
-    		
-    		this.id = params.id,
-    		this.url = params.url;
-    		let styleParams = {};
-    		if ('color' in params) styleParams.color = params.color;
-    		if ('opacity' in params) styleParams.opacity = params.opacity;
-    		if ('pointsize' in params) styleParams.pointsize = params.pointsize;
-
-    		this.loadStatus = 0;
-    		this.viewProjectionMatrix = null;
-    		
-    		this.type = 'custom';
-    		this.renderingMode = '3d';
-    		
-    		this.getCameraPosition = function() {
-    			if (!this.viewProjectionMatrix)
-    				return new THREE.Vector3();
-    			let cam = new THREE.Camera();
-    			let rootInverse = new THREE.Matrix4().getInverse(this.rootTransform);
-    			cam.projectionMatrix.elements = this.viewProjectionMatrix;
-    			cam.projectionMatrixInverse = new THREE.Matrix4().getInverse( cam.projectionMatrix );// add since three@0.103.0
-    			let campos = new THREE.Vector3(0, 0, 0).unproject(cam).applyMatrix4(rootInverse);
-    			return campos;
-    		};
-    		
-    		this.onAdd = function(map, gl) {
-    			this.map = map;
-    			this.camera = new THREE.Camera();
-    			this.scene = new THREE.Scene();
-    			this.rootTransform = transform2mapbox([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]); // identity matrix tranformed to mapbox scale
-
-    			let directionalLight = new THREE.DirectionalLight(0xffffff);
-    			directionalLight.position.set(0, -70, 100).normalize();
-    			this.scene.add(directionalLight);
-
-    			let directionalLight2 = new THREE.DirectionalLight(0x999999);
-    			directionalLight2.position.set(0, 70, 100).normalize();
-    			this.scene.add(directionalLight2);
-    			
-    			this.tileset = new TileSet();
-    			let self = this;
-    			this.tileset.load(this.url, styleParams).then(function(){
-    				if (self.tileset.root.transform) {
-    					self.rootTransform = transform2mapbox(self.tileset.root.transform);
-    				} else {
-    					self.rootTransform = transform2mapbox([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]); // identity matrix tranformed to mapbox scale
-    				}
-    				
-    				if (self.tileset.root) {
-    					self.scene.add(self.tileset.root.totalContent);
-    				}
-    				
-    				self.loadStatus = 1;
-    				function refresh() {
-    					let frustum = new THREE.Frustum();
-    					frustum.setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(self.camera.projectionMatrix, self.camera.matrixWorldInverse));
-    					self.tileset.root.checkLoad(frustum, self.getCameraPosition());
-    				}				map.on('dragend',refresh); 
-    				map.on('moveend',refresh); 
-    				map.on('load',refresh);
-    			});
-    			
-    			this.renderer = new THREE.WebGLRenderer({
-    				canvas: map.getCanvas(),
-    				context: gl
-    			});
-    			this.renderer.autoClear = false;
-
-
-    			//this.skybox = Utils.loadSkybox(new URL('https://threejsfundamentals.org/threejs/resources/images/equirectangularmaps/tears_of_steel_bridge_2k.jpg').href);
-
-    		},
-    		this.render = function(gl, viewProjectionMatrix) {
-    			this.viewProjectionMatrix = viewProjectionMatrix;
-    			let l = new THREE.Matrix4().fromArray(viewProjectionMatrix);
-    			this.renderer.state.reset();
-    			
-    			// The root tile transform is applied to the camera while rendering
-    			// instead of to the root tile. This avoids precision errors.
-    			this.camera.projectionMatrix = l.multiply(this.rootTransform);
-    			
-    			/*RENDER SKYBOX */
-    			/* WIP
-    			this.skybox.camera.rotation.copy(this.camera.rotation);
-    			this.skybox.camera.fov = this.camera.fov;
-    			this.skybox.camera.aspect = this.camera.aspect;
-    			this.skybox.camera.updateProjectionMatrix();
-    			this.renderer.render(this.skybox.scene, this.skybox.camera);
-    			*/
-    			this.renderer.render(this.scene, this.camera);		
-    			if (this.loadStatus == 1) { // first render after root tile is loaded
-    				this.loadStatus = 2;
-    				let frustum = new THREE.Frustum();
-    				frustum.setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
-    				if (this.tileset.root) {
-    					this.tileset.root.checkLoad(frustum, this.getCameraPosition());
-    				}
-    			}
-    		};
-    	}
+        return result;
+      }
     }
+
+    Mapbox3DTiles.Layer = Layer;
 
     class GmBetaMapbox3D extends LitElement$1 {
-
-      constructor(){
-        super();
-        this.center = [4.48732, 51.90217];
-        this.zoom = 14.3;
-        this.bearing = 0;
-        this.pitch = 45;
-        //this.style = 'mapbox://styles/mapbox/dark-v10?optimize=true';
-      }
-      render(){
-        return html$1`
-      <div id='map'></div>
-    `;
-      }
       static get styles() {
         return css$1`
-        #map { position:absolute; top:0; bottom:0; width:100%; }
+      #map {
+        position: relative;
+        width: 100%;
+        height: 100%;
+      }
+
+      .mapboxgl-canvas:focus {
+        outline: none;
+      }
+
+      .mapboxgl-control-container {
+        position: absolute;
+        z-index: 1;
+        bottom: 30px;
+        right: 30px;
+      }
+
+      .mapboxgl-ctrl-group {
+        direction: rtl;
+      }
+
+      .mapboxgl-ctrl-group > button {
+        width: 40px;
+        height: 40px;
+        margin: 2px;
+        border-radius: 4px;
+        background-color: var(--gm-white-color, #fff);
+        border: none;
+        box-shadow: 0 0 1px 1px rgba(204, 204, 204, 0.5);
+        cursor: pointer;
+      }
+
+      .mapboxgl-ctrl-group > button:hover {
+        background-color: var(--gm-primary-color, #1c5a6d);
+      }
+
+      .mapboxgl-ctrl-icon {
+        display: inline-block;
+        width: 24px;
+        height: 24px;
+        background-repeat: no-repeat;
+        background-size: cover;
+      }
+
+      .mapboxgl-ctrl button.mapboxgl-ctrl-zoom-in .mapboxgl-ctrl-icon {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath stroke='none' d='M12.5208333,12.5208333 L12.5208333,23.5608333 C12.5208333,23.82593 12.2876483,24.0408333 12,24.0408333 C11.7123517,24.0408333 11.4791667,23.82593 11.4791667,23.5608333 L11.4791667,12.5208333 L0.520833333,12.5208333 C0.255736653,12.5208333 0.0408333333,12.2876483 0.0408333333,12 C0.0408333333,11.7123517 0.255736653,11.4791667 0.520833333,11.4791667 L11.4791667,11.4791667 L11.4791667,0.520833333 C11.4791667,0.255736653 11.7123517,0.0408333333 12,0.0408333333 C12.2876483,0.0408333333 12.5208333,0.255736653 12.5208333,0.520833333 L12.5208333,11.4791667 L23.5608333,11.4791667 C23.82593,11.4791667 24.0408333,11.7123517 24.0408333,12 C24.0408333,12.2876483 23.82593,12.5208333 23.5608333,12.5208333 L12.5208333,12.5208333 Z'%3E%3C/path%3E%3C/svg%3E");
+      }
+      .mapboxgl-ctrl button.mapboxgl-ctrl-zoom-out .mapboxgl-ctrl-icon {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath stroke='none' d='M23.52,11.5 L0.48,11.5 C0.21490332,11.5 0,11.7238576 0,12 C0,12.2761424 0.21490332,12.5 0.48,12.5 L23.52,12.5 C23.7850967,12.5 24,12.2761424 24,12 C24,11.7238576 23.7850967,11.5 23.52,11.5 Z'%3E%3C/path%3E%3C/svg%3E");
+      }
+      .mapboxgl-ctrl button.mapboxgl-ctrl-compass .mapboxgl-ctrl-icon {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath stroke='none' d='M1.43862618,16.3812576 C0.980574737,16.3812576 0.82994612,15.7669157 1.23604759,15.5550367 L22.2574203,4.58736401 C22.6373812,4.38912351 23.046515,4.79825728 22.8482745,5.17821823 L11.8806018,26.1995909 C11.6687228,26.6056924 11.0543809,26.4550638 11.0543809,25.9970123 L11.0543809,16.3812576 L1.43862618,16.3812576 Z M11.4923262,15.5053671 C11.7341967,15.5053671 11.9302714,15.7014419 11.9302714,15.9433123 L11.9302714,24.2108437 L21.427155,6.00848352 L3.22479483,15.5053671 L11.4923262,15.5053671 Z' transform='rotate(-45 11.95 15.486)'%3E%3C/path%3E%3C/svg%3E");
+      }
+      .mapboxgl-ctrl button.mapboxgl-ctrl-zoom-in:hover .mapboxgl-ctrl-icon {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath stroke='none' fill='white' d='M12.5208333,12.5208333 L12.5208333,23.5608333 C12.5208333,23.82593 12.2876483,24.0408333 12,24.0408333 C11.7123517,24.0408333 11.4791667,23.82593 11.4791667,23.5608333 L11.4791667,12.5208333 L0.520833333,12.5208333 C0.255736653,12.5208333 0.0408333333,12.2876483 0.0408333333,12 C0.0408333333,11.7123517 0.255736653,11.4791667 0.520833333,11.4791667 L11.4791667,11.4791667 L11.4791667,0.520833333 C11.4791667,0.255736653 11.7123517,0.0408333333 12,0.0408333333 C12.2876483,0.0408333333 12.5208333,0.255736653 12.5208333,0.520833333 L12.5208333,11.4791667 L23.5608333,11.4791667 C23.82593,11.4791667 24.0408333,11.7123517 24.0408333,12 C24.0408333,12.2876483 23.82593,12.5208333 23.5608333,12.5208333 L12.5208333,12.5208333 Z'%3E%3C/path%3E%3C/svg%3E");
+      }
+      .mapboxgl-ctrl button.mapboxgl-ctrl-zoom-out:hover .mapboxgl-ctrl-icon {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath stroke='none' fill='white' d='M23.52,11.5 L0.48,11.5 C0.21490332,11.5 0,11.7238576 0,12 C0,12.2761424 0.21490332,12.5 0.48,12.5 L23.52,12.5 C23.7850967,12.5 24,12.2761424 24,12 C24,11.7238576 23.7850967,11.5 23.52,11.5 Z'%3E%3C/path%3E%3C/svg%3E");
+      }
+      .mapboxgl-ctrl button.mapboxgl-ctrl-compass:hover .mapboxgl-ctrl-icon {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath stroke='none' fill='white' d='M1.43862618,16.3812576 C0.980574737,16.3812576 0.82994612,15.7669157 1.23604759,15.5550367 L22.2574203,4.58736401 C22.6373812,4.38912351 23.046515,4.79825728 22.8482745,5.17821823 L11.8806018,26.1995909 C11.6687228,26.6056924 11.0543809,26.4550638 11.0543809,25.9970123 L11.0543809,16.3812576 L1.43862618,16.3812576 Z M11.4923262,15.5053671 C11.7341967,15.5053671 11.9302714,15.7014419 11.9302714,15.9433123 L11.9302714,24.2108437 L21.427155,6.00848352 L3.22479483,15.5053671 L11.4923262,15.5053671 Z' transform='rotate(-45 11.95 15.486)'%3E%3C/path%3E%3C/svg%3E");
+      }
+      .mapboxgl-popup{position:absolute;top:0;left:0;display:-webkit-flex;display:flex;will-change:transform;pointer-events:none}.mapboxgl-popup-anchor-top,.mapboxgl-popup-anchor-top-left,.mapboxgl-popup-anchor-top-right{-webkit-flex-direction:column;flex-direction:column}.mapboxgl-popup-anchor-bottom,.mapboxgl-popup-anchor-bottom-left,.mapboxgl-popup-anchor-bottom-right{-webkit-flex-direction:column-reverse;flex-direction:column-reverse}.mapboxgl-popup-anchor-left{-webkit-flex-direction:row;flex-direction:row}.mapboxgl-popup-anchor-right{-webkit-flex-direction:row-reverse;flex-direction:row-reverse}.mapboxgl-popup-tip{width:0;height:0;border:10px solid transparent;z-index:1}.mapboxgl-popup-anchor-top .mapboxgl-popup-tip{-webkit-align-self:center;align-self:center;border-top:none;border-bottom-color:#fff}.mapboxgl-popup-anchor-top-left .mapboxgl-popup-tip{-webkit-align-self:flex-start;align-self:flex-start;border-top:none;border-left:none;border-bottom-color:#fff}.mapboxgl-popup-anchor-top-right .mapboxgl-popup-tip{-webkit-align-self:flex-end;align-self:flex-end;border-top:none;border-right:none;border-bottom-color:#fff}.mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip{-webkit-align-self:center;align-self:center;border-bottom:none;border-top-color:#fff}.mapboxgl-popup-anchor-bottom-left .mapboxgl-popup-tip{-webkit-align-self:flex-start;align-self:flex-start;border-bottom:none;border-left:none;border-top-color:#fff}.mapboxgl-popup-anchor-bottom-right .mapboxgl-popup-tip{-webkit-align-self:flex-end;align-self:flex-end;border-bottom:none;border-right:none;border-top-color:#fff}.mapboxgl-popup-anchor-left .mapboxgl-popup-tip{-webkit-align-self:center;align-self:center;border-left:none;border-right-color:#fff}.mapboxgl-popup-anchor-right .mapboxgl-popup-tip{-webkit-align-self:center;align-self:center;border-right:none;border-left-color:#fff}.mapboxgl-popup-close-button{position:absolute;right:0;top:0;border:0;border-radius:0 3px 0 0;cursor:pointer;background-color:transparent}.mapboxgl-popup-close-button:hover{background-color:rgba(0,0,0,.05)}.mapboxgl-popup-content{position:relative;background:#fff;border-radius:3px;box-shadow:0 1px 2px rgba(0,0,0,.1);padding:10px 10px 15px;pointer-events:auto}.mapboxgl-popup-anchor-top-left .mapboxgl-popup-content{border-top-left-radius:0}.mapboxgl-popup-anchor-top-right .mapboxgl-popup-content{border-top-right-radius:0}.mapboxgl-popup-anchor-bottom-left .mapboxgl-popup-content{border-bottom-left-radius:0}.mapboxgl-popup-anchor-bottom-right .mapboxgl-popup-content{border-bottom-right-radius:0}.mapboxgl-popup-track-pointer{display:none}.mapboxgl-popup-track-pointer *{pointer-events:none;user-select:none}.mapboxgl-map:hover .mapboxgl-popup-track-pointer{display:flex}.mapboxgl-map:active .mapboxgl-popup-track-pointer{display:none}
     `;
       }
+
+      render() {
+        return html$1` <div id="map"></div> `;
+      }
+
       static get properties() {
-        return { 
-            center: {type: Array},
-            zoom: {type: Number},
-            bearing: {type: Number},
-            pitch: {type: Number},
-            style: {type: String},
-            map: {type: Object}
+        return {
+          center: { type: Array },
+          zoom: { type: Number },
+          bearing: { type: Number },
+          pitch: { type: Number },
+          style: { type: String },
+          map: { type: Object },
+          controls: { type: Boolean }
         };
       }
-      addLayer(config){
-        if (config.type === 'raster') {
-          this.map.addLayer(config);
-        }
-        else if (config.type === '3dtiles') {
-          this.map.addLayer(new Mapbox3DTileLayer(config));
-        }
-        this.map.triggerRepaint();  
+
+      constructor() {
+        super();
+        this.center = [0, 0];
+        this.zoom = 0;
+        this.bearing = 0;
+        this.pitch = 0;
+        this.controls = false;
       }
-      toggleVisible(clickedLayer){
-        var visibility = this.map.getLayoutProperty(clickedLayer, 'visibility');
-     
+
+      addLayer(config) {
+        let retlayer;
+        if (config.type === 'raster') {
+          retlayer = this.map.addLayer(config);
+        } else if (config.type === '3dtiles') {
+          //FIXME: this is a hacky and inconsequent way to return a layer
+          retlayer = new Mapbox3DTiles.Layer(config);
+          this.map.addLayer(retlayer);
+        } else {
+          console.warn('Missing or invalid layer type.');
+        }
+        this.map.triggerRepaint();
+        return retlayer;
+      }
+
+      toggleVisible(clickedLayer) {
+        const visibility = this.map.getLayoutProperty(clickedLayer, 'visibility');
+
         if (visibility === 'visible' || visibility == undefined) {
           this.map.setLayoutProperty(clickedLayer, 'visibility', 'none');
           //this.className = '';
@@ -20054,25 +20658,28 @@ input[type=range]:focus::-ms-fill-upper {
           this.map.setLayoutProperty(clickedLayer, 'visibility', 'visible');
         }
       }
-      flyTo(coords){
-        this.map.flyTo({center: coords});
+
+      flyTo(coords) {
+        this.map.flyTo({ center: coords });
       }
-      firstUpdated(){
-        let mapcontainer = this.shadowRoot.getElementById('map');
-        let style = {
-          "version": 8,
-          "name": "EmptyStyle",
-          "id": "emptystyle",
-          "sources": {
-          },
-          "layers": [{
-            id: 'background',
-            type: 'background',
-            paint: { 'background-color': 'lightgrey'},
-            layout: {'visibility': 'visible'}
-          }
+
+      firstUpdated() {
+        const mapcontainer = this.shadowRoot.getElementById('map');
+        const style = {
+          version: 8,
+          name: 'EmptyStyle',
+          id: 'emptystyle',
+          sources: {},
+          layers: [
+            {
+              id: 'background',
+              type: 'background',
+              paint: { 'background-color': 'lightgrey' },
+              layout: { visibility: 'visible' }
+            }
           ]
-        }; 
+        };
+
         this.map = new mapboxgl.Map({
           container: mapcontainer,
           style: style,
@@ -20080,11 +20687,28 @@ input[type=range]:focus::-ms-fill-upper {
           zoom: this.zoom,
           bearing: this.bearing,
           pitch: this.pitch,
-          hash: true
+          hash: true,
+          transformRequest: (url, resourceType) => {
+            if (
+              resourceType === 'Source' &&
+              (url.startsWith('https://services.geodan.nl') ||
+                url.startsWith('https://apps.geodan.nl'))
+            ) {
+              return {
+                credentials: 'include'
+              };
+            }
+          }
         });
-        
+
+        if (this.controls) {
+          this.map.addControl(
+            new mapboxgl.NavigationControl({ visualizePitch: true })
+          );
+        }
       }
     }
+
     customElements.define('gm-beta-mapbox3d', GmBetaMapbox3D);
 
     /**
@@ -36395,7 +37019,7 @@ input[type=range]:focus::-ms-fill-upper {
       menu-items='[{"title": "GeodanMaps", "url": "https://www.geodanmaps.nl/" }, {"title": "Geodan", "url": "https://www.geodan.nl"}]'
     ></gm-profile-panel>
    
-    <gm-beta-mapbox3d></gm-beta-mapbox3d>
+    <gm-beta-mapbox3d .center="${[4.48732, 51.90217]}" zoom="14.3" bearing="0" pitch="45" controls></gm-beta-mapbox3d>
 
     <tool-bar 
       .thematiclayers="${this.thematiclayers}"
@@ -36435,7 +37059,8 @@ input[type=range]:focus::-ms-fill-upper {
             return {
               id: String(l.id), 
               type: '3dtiles',
-              url: l.source.url
+    	  url: l.source.url,
+    	  lighting: 'hemisphere'
             }
           }
           else if (l.source.type === 'OGC_WMTS'){
@@ -36509,10 +37134,17 @@ input[type=range]:focus::-ms-fill-upper {
         toolbar.backgroundLayers = alllayers.filter(d=>d.isBaseLayer==true);
 
         let el = this.shadowRoot.querySelector('gm-beta-mapbox3d');
-        el.map.setCenter([config.map.view.center.x,config.map.view.center.y]);
-        el.map.setZoom(config.map.view.zoom);
+        
+        el.map
+          .setCenter([config.map.view.center.x,config.map.view.center.y])
+          .setZoom(config.map.view.zoom);
         
         setTimeout(_=>{
+          
+          el.map
+            .setCenter([config.map.view.center.x,config.map.view.center.y])
+            .setZoom(config.map.view.zoom);
+          
           mapbox.map.triggerRepaint();
         },5000);
       }
